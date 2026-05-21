@@ -1,4 +1,5 @@
 import os
+import secrets
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -17,3 +18,14 @@ else:
 
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
+
+# 用户数据隔离目录
+USER_DATA_DIR = os.path.join(DATA_DIR, "user_data")
+
+# 认证配置
+JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
+MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "3"))
+LOCKOUT_HOURS = int(os.getenv("LOCKOUT_HOURS", "1"))
+CAPTCHA_TTL_MINUTES = int(os.getenv("CAPTCHA_TTL_MINUTES", "5"))

@@ -7,14 +7,14 @@ from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_dashscope import DashScopeEmbeddings
 import dashscope
-from config import DASHSCOPE_API_KEY, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR
+from config import DASHSCOPE_API_KEY, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 
 
 dashscope.api_key = DASHSCOPE_API_KEY
 
 
 class RAGEngine:
-    def __init__(self):
+    def __init__(self, user_id: str = None):
         self.embeddings = DashScopeEmbeddings(
             model=EMBEDDING_MODEL,
             dashscope_api_key=DASHSCOPE_API_KEY,
@@ -24,30 +24,39 @@ class RAGEngine:
             chunk_overlap=CHUNK_OVERLAP,
             separators=["\n\n", "\n", "。", "！", "？", "；", "，", " ", ""],
         )
-        self.meta_path = os.path.join(CHROMA_DIR, "metadata.json")
+
+        if user_id:
+            user_dir = os.path.join(USER_DATA_DIR, user_id)
+            self.upload_dir = os.path.join(user_dir, "uploads")
+            self.chroma_dir = os.path.join(user_dir, "chroma_db")
+        else:
+            self.upload_dir = UPLOAD_DIR
+            self.chroma_dir = CHROMA_DIR
+
+        os.makedirs(self.upload_dir, exist_ok=True)
+        os.makedirs(self.chroma_dir, exist_ok=True)
+
+        self.meta_path = os.path.join(self.chroma_dir, "metadata.json")
         self.vector_store = self._load_or_create_store()
 
     def _load_or_create_store(self):
-        """加载已有的 FAISS 索引，或创建新的空索引"""
-        index_path = os.path.join(CHROMA_DIR, "index.faiss")
+        index_path = os.path.join(self.chroma_dir, "index.faiss")
         if os.path.exists(index_path):
             try:
                 return FAISS.load_local(
-                    CHROMA_DIR, self.embeddings,
+                    self.chroma_dir, self.embeddings,
                     allow_dangerous_deserialization=True,
                 )
             except Exception as e:
                 print(f"FAISS 加载失败，将重建索引：{e}")
-        # 创建空索引
         dummy = Document(page_content="init", metadata={"source": "_init_"})
         store = FAISS.from_documents([dummy], self.embeddings)
-        store.save_local(CHROMA_DIR)
+        store.save_local(self.chroma_dir)
         return store
 
     def _persist(self):
-        """持久化 FAISS 索引到磁盘"""
         try:
-            self.vector_store.save_local(CHROMA_DIR)
+            self.vector_store.save_local(self.chroma_dir)
         except Exception as e:
             print(f"FAISS 持久化失败：{e}")
 
@@ -61,7 +70,7 @@ class RAGEngine:
         return {"documents": {}}
 
     def _save_metadata(self, metadata: dict):
-        os.makedirs(CHROMA_DIR, exist_ok=True)
+        os.makedirs(self.chroma_dir, exist_ok=True)
         with open(self.meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
 
@@ -112,7 +121,6 @@ class RAGEngine:
         }
 
     def query(self, question: str, k: int = 5) -> dict:
-        """(保留原方法) 检索 + 调用 LLM，返回完整回答"""
         result = self.retrieve(question, k)
         if result.get("error"):
             return {"answer": result["error"], "sources": []}
@@ -138,7 +146,6 @@ class RAGEngine:
         return {"answer": response.output.choices[0].message.content, "sources": result["sources"]}
 
     def retrieve(self, question: str, k: int = 5) -> dict:
-        """仅检索相关文档，不调用 LLM，返回上下文字段和来源"""
         try:
             docs_with_scores = self.vector_store.similarity_search_with_score(question, k=k)
         except Exception:
@@ -169,7 +176,6 @@ class RAGEngine:
         return {"context": "\n---\n".join(context_parts), "sources": sources}
 
     def stream_query(self, question: str, k: int = 5):
-        """检索文档后流式调用 LLM。每次 yield (type, data)"""
         result = self.retrieve(question, k)
         if result.get("error"):
             yield ("error", result["error"])
@@ -237,9 +243,8 @@ class RAGEngine:
         batch_size = 10
         for doc_id, info in meta.get("documents", {}).items():
             file_name = info.get("file_name", "")
-            # 查找对应的存储文件（格式：{doc_id}.pdf）
             storage_name = f"{doc_id}.pdf"
-            file_path = os.path.join(UPLOAD_DIR, storage_name)
+            file_path = os.path.join(self.upload_dir, storage_name)
             if os.path.exists(file_path):
                 pages = self._extract_pdf_text(file_path)
                 if pages:

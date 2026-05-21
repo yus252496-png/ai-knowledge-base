@@ -7,6 +7,50 @@ const api = axios.create({
   timeout: 120000,
 })
 
+// JWT 请求拦截器
+api.interceptors.request.use(config => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`
+  }
+  return config
+})
+
+// 401 响应拦截器
+api.interceptors.response.use(
+  response => response,
+  error => {
+    if (error.response?.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('userId')
+      localStorage.removeItem('phone')
+      window.location.href = '/login'
+    }
+    return Promise.reject(error)
+  }
+)
+
+// 认证
+export function register(phone, password) {
+  const params = new URLSearchParams()
+  params.append('phone', phone)
+  params.append('password', password)
+  return api.post('/auth/register', params)
+}
+
+export function getCaptcha() {
+  return api.get('/auth/captcha')
+}
+
+export function login(phone, password, captchaId, captchaCode) {
+  const params = new URLSearchParams()
+  params.append('phone', phone)
+  params.append('password', password)
+  params.append('captcha_id', captchaId)
+  params.append('captcha_code', captchaCode)
+  return api.post('/auth/login', params)
+}
+
 // 文档
 export function uploadDocument(file) {
   const form = new FormData()
@@ -28,19 +72,28 @@ export function chat(question, conversationId = null) {
   return api.post('/chat', { question, conversation_id: conversationId })
 }
 
-// 流式聊天：回调方式，返回 AbortController 以便取消
+// 流式聊天
 export function chatStream(question, conversationId, callbacks) {
   const controller = new AbortController()
-
-  // 类型: 'per-word' 流式输出关键词，'typewriter' 逐字出现
   const mode = 'typewriter'
 
   fetch(`${BASE}/api/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${localStorage.getItem('token')}`,
+    },
     body: JSON.stringify({ question, conversation_id: conversationId }),
     signal: controller.signal,
   }).then(async (response) => {
+    if (response.status === 401) {
+      localStorage.removeItem('token')
+      localStorage.removeItem('userId')
+      localStorage.removeItem('phone')
+      window.location.href = '/login'
+      return
+    }
+
     const reader = response.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -63,11 +116,9 @@ export function chatStream(question, conversationId, callbacks) {
           const msg = JSON.parse(payload)
 
           if (mode === 'typewriter' && msg.type === 'token') {
-            // dashscope 返回的是累计文本（非 delta），直接赋值
             fullText = msg.data
             callbacks.onMessage?.({ type: 'fulltext', data: fullText })
           } else {
-            // sources / done / error 照常
             callbacks.onMessage?.(msg)
           }
         } catch {}

@@ -3,17 +3,22 @@ import json
 import uuid
 from datetime import datetime
 from typing import Optional
-from config import DATA_DIR
+from config import DATA_DIR, USER_DATA_DIR
 
 
 class ConversationStore:
-    def __init__(self):
-        self.data_path = os.path.join(DATA_DIR, "conversations.json")
-        os.makedirs(DATA_DIR, exist_ok=True)
+    def __init__(self, user_id: str = None):
+        if user_id:
+            user_dir = os.path.join(USER_DATA_DIR, user_id)
+            os.makedirs(user_dir, exist_ok=True)
+            self.data_path = os.path.join(user_dir, "conversations.json")
+        else:
+            self.data_path = os.path.join(DATA_DIR, "conversations.json")
         self._ensure_file()
 
     def _ensure_file(self):
         if not os.path.exists(self.data_path):
+            os.makedirs(os.path.dirname(self.data_path), exist_ok=True)
             self._save({"conversations": {}, "active_id": None})
 
     def _load(self) -> dict:
@@ -24,6 +29,7 @@ class ConversationStore:
             return {"conversations": {}, "active_id": None}
 
     def _save(self, data: dict):
+        os.makedirs(os.path.dirname(self.data_path), exist_ok=True)
         with open(self.data_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -77,7 +83,6 @@ class ConversationStore:
             "sources": sources or [],
         })
         conv["updated_at"] = datetime.now().isoformat()
-        # 用第一条用户消息更新标题
         if role == "user" and conv["title"] == "新对话":
             conv["title"] = content[:30] + "..." if len(content) > 30 else content
         data["active_id"] = conv_id
