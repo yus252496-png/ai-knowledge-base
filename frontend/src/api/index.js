@@ -31,10 +31,12 @@ api.interceptors.response.use(
 )
 
 // 认证
-export function register(phone, password) {
+export function register(phone, password, securityQuestion, securityAnswer) {
   const params = new URLSearchParams()
   params.append('phone', phone)
   params.append('password', password)
+  params.append('security_question', securityQuestion)
+  params.append('security_answer', securityAnswer)
   return api.post('/auth/register', params)
 }
 
@@ -49,6 +51,31 @@ export function login(phone, password, captchaId, captchaCode) {
   params.append('captcha_id', captchaId)
   params.append('captcha_code', captchaCode)
   return api.post('/auth/login', params)
+}
+
+// 密保 / 忘记密码
+export function getSecurityQuestions() {
+  return api.get('/auth/security-questions')
+}
+
+export function forgotPassword(phone) {
+  const params = new URLSearchParams()
+  params.append('phone', phone)
+  return api.post('/auth/forgot-password', params)
+}
+
+export function verifySecurity(phone, answer) {
+  const params = new URLSearchParams()
+  params.append('phone', phone)
+  params.append('answer', answer)
+  return api.post('/auth/verify-security', params)
+}
+
+export function resetPassword(resetToken, newPassword) {
+  const params = new URLSearchParams()
+  params.append('reset_token', resetToken)
+  params.append('new_password', newPassword)
+  return api.post('/auth/reset-password', params)
 }
 
 // 文档

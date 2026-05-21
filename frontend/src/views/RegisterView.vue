@@ -38,6 +38,23 @@
           />
           <span v-if="confirmPassword && password !== confirmPassword" class="field-hint">两次密码不一致</span>
         </div>
+        <!-- 密保问题 -->
+        <div class="field">
+          <label>密保问题</label>
+          <select v-model="securityQuestion" :disabled="loading" class="auth-select">
+            <option value="" disabled>请选择密保问题</option>
+            <option v-for="q in questions" :key="q" :value="q">{{ q }}</option>
+          </select>
+        </div>
+        <div class="field">
+          <label>密保答案</label>
+          <input
+            v-model="securityAnswer"
+            type="text"
+            placeholder="请牢记您的答案"
+            :disabled="loading"
+          />
+        </div>
         <div v-if="errorMsg" class="error-msg">{{ errorMsg }}</div>
         <button type="submit" class="auth-btn" :disabled="!canSubmit || loading">
           {{ loading ? '注册中...' : '注册' }}
@@ -51,9 +68,9 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { register } from '../api/index.js'
+import { register, getSecurityQuestions } from '../api/index.js'
 import { authState } from '../stores/auth.js'
 
 const router = useRouter()
@@ -61,6 +78,9 @@ const router = useRouter()
 const phone = ref('')
 const password = ref('')
 const confirmPassword = ref('')
+const securityQuestion = ref('')
+const securityAnswer = ref('')
+const questions = ref([])
 const loading = ref(false)
 const errorMsg = ref('')
 
@@ -68,6 +88,8 @@ const canSubmit = computed(() => {
   return phone.value.length === 11
     && password.value.length >= 6
     && password.value === confirmPassword.value
+    && securityQuestion.value
+    && securityAnswer.value.trim()
     && !loading.value
 })
 
@@ -77,7 +99,7 @@ async function handleRegister() {
   errorMsg.value = ''
 
   try {
-    const res = await register(phone.value, password.value)
+    const res = await register(phone.value, password.value, securityQuestion.value, securityAnswer.value.trim())
     if (res.data.token) {
       authState.login(res.data.token, res.data.user_id, res.data.phone_masked)
       router.push('/')
@@ -94,6 +116,13 @@ async function handleRegister() {
     loading.value = false
   }
 }
+
+onMounted(async () => {
+  try {
+    const res = await getSecurityQuestions()
+    questions.value = res.data.questions || []
+  } catch {}
+})
 </script>
 
 <style scoped>
@@ -152,8 +181,25 @@ async function handleRegister() {
 .auth-form input:focus {
   border-color: #1f1f1f;
 }
-.auth-form input:disabled {
+.auth-form input:disabled,
+.auth-form select:disabled {
   background: #f7f7f8;
+}
+.auth-select {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+  background: #fff;
+  color: #1f1f1f;
+  cursor: pointer;
+}
+.auth-select:focus {
+  border-color: #1f1f1f;
 }
 .field-hint {
   display: block;

@@ -1,6 +1,4 @@
-import os
 import re
-import json
 import uuid
 import time
 import hashlib
@@ -12,43 +10,22 @@ from datetime import datetime, timedelta, timezone
 import jwt
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont
 
 from config import (
-    DATA_DIR, USER_DATA_DIR, JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS,
+    JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS,
     MAX_LOGIN_ATTEMPTS, LOCKOUT_HOURS, CAPTCHA_TTL_MINUTES,
 )
+from database import get_db
 
 
 # ===== 工具函数 =====
 
-def _atomic_write(filepath: str, data: dict):
-    """先写临时文件再 rename，防止写入中断导致文件损坏"""
-    tmp = filepath + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    os.replace(tmp, filepath)
-
-
-def _read_json(filepath: str, default: dict = None) -> dict:
-    if default is None:
-        default = {}
-    if not os.path.exists(filepath):
-        return default
-    try:
-        with open(filepath, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return default
-
-
 def _hash_phone(phone: str) -> str:
-    """手机号单向哈希，用于索引（不用于安全验证）"""
     return hashlib.sha256(phone.encode()).hexdigest()[:16]
 
 
 def _hash_password(password: str) -> str:
-    """PBKDF2-HMAC-SHA256 密码哈希"""
     salt = secrets.token_hex(16)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 260000)
     return f"{salt}${dk.hex()}"
@@ -64,7 +41,6 @@ def _verify_password(password: str, stored: str) -> bool:
 
 
 def _mask_phone(phone: str) -> str:
-    """138****1234"""
     return phone[:3] + "****" + phone[-4:]
 
 
@@ -78,87 +54,151 @@ def validate_phone(phone: str):
         raise HTTPException(status_code=422, detail="手机号格式不正确")
 
 
+# ===== 密保问题 =====
+
+SECURITY_QUESTIONS = [
+    "你的出生城市是？",
+    "你的小学名称是？",
+    "你最喜欢的食物是？",
+    "你的宠物名字是？",
+    "你母亲的姓名是？",
+]
+
+FORGOT_PASSWORD_EXPIRY = 300  # 5 分钟
+
+
 # ===== 用户存储 =====
 
-USERS_PATH = os.path.join(DATA_DIR, "users.json")
-
-
 class UserStore:
-    def register(self, phone: str, password: str) -> dict:
+    def register(self, phone: str, password: str, security_question: str, security_answer: str) -> dict:
         validate_phone(phone)
         if len(password) < 6:
             raise HTTPException(status_code=422, detail="密码至少 6 位")
+        if security_question not in SECURITY_QUESTIONS:
+            raise HTTPException(status_code=422, detail="无效的密保问题")
+        if len(security_answer.strip()) < 1:
+            raise HTTPException(status_code=422, detail="密保答案不能为空")
 
-        os.makedirs(DATA_DIR, exist_ok=True)
-        data = _read_json(USERS_PATH)
-
-        # 检查手机号是否已注册
         phone_hash = _hash_phone(phone)
-        for uid, info in data.get("users", {}).items():
-            if info.get("phone_hash") == phone_hash:
+        answer_hash = _hash_phone(security_answer.strip().lower())
+
+        with get_db() as db:
+            existing = db.execute(
+                "SELECT 1 FROM users WHERE phone_hash = ?", (phone_hash,)
+            ).fetchone()
+            if existing:
                 raise HTTPException(status_code=409, detail="该手机号已注册")
 
-        user_id = str(uuid.uuid4())[:8]
-        if "users" not in data:
-            data["users"] = {}
+            user_id = str(uuid.uuid4())[:8]
+            db.execute(
+                "INSERT INTO users (user_id, phone_hash, password_hash, phone_masked, created_at, security_question, security_answer_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (user_id, phone_hash, _hash_password(password), _mask_phone(phone), datetime.now(timezone.utc).isoformat(), security_question, answer_hash),
+            )
 
-        data["users"][user_id] = {
-            "phone_hash": phone_hash,
-            "password_hash": _hash_password(password),
-            "phone_masked": _mask_phone(phone),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _atomic_write(USERS_PATH, data)
         return {"id": user_id, "phone_masked": _mask_phone(phone)}
 
     def authenticate(self, phone: str, password: str) -> str | None:
-        """验证用户凭据，成功返回 user_id，失败返回 None"""
-        data = _read_json(USERS_PATH)
         phone_hash = _hash_phone(phone)
-        for uid, info in data.get("users", {}).items():
-            if info.get("phone_hash") == phone_hash:
-                if _verify_password(password, info["password_hash"]):
-                    return uid
-                return None
+        with get_db() as db:
+            row = db.execute(
+                "SELECT user_id, password_hash FROM users WHERE phone_hash = ?", (phone_hash,)
+            ).fetchone()
+        if row is None:
+            return None
+        if _verify_password(password, row["password_hash"]):
+            return row["user_id"]
         return None
 
     def get_user(self, user_id: str) -> dict | None:
-        data = _read_json(USERS_PATH)
-        return data.get("users", {}).get(user_id)
+        with get_db() as db:
+            row = db.execute(
+                "SELECT user_id, phone_masked, phone_hash, created_at FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["user_id"],
+            "phone_masked": row["phone_masked"],
+            "phone_hash": row["phone_hash"],
+            "created_at": row["created_at"],
+        }
+
+    def get_user_by_phone(self, phone: str) -> dict | None:
+        """通过手机号查找用户，返回用户信息（不含密码）"""
+        phone_hash = _hash_phone(phone)
+        with get_db() as db:
+            row = db.execute(
+                "SELECT user_id, phone_masked, security_question FROM users WHERE phone_hash = ?",
+                (phone_hash,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["user_id"],
+            "phone_masked": row["phone_masked"],
+            "security_question": row["security_question"],
+        }
+
+    def verify_security_answer(self, phone: str, answer: str) -> bool:
+        """验证密保答案"""
+        phone_hash = _hash_phone(phone)
+        answer_hash = _hash_phone(answer.strip().lower())
+        with get_db() as db:
+            row = db.execute(
+                "SELECT 1 FROM users WHERE phone_hash = ? AND security_answer_hash = ?",
+                (phone_hash, answer_hash),
+            ).fetchone()
+        return row is not None
+
+    def update_password(self, phone: str, new_password: str):
+        """更新密码"""
+        if len(new_password) < 6:
+            raise HTTPException(status_code=422, detail="密码至少 6 位")
+        phone_hash = _hash_phone(phone)
+        with get_db() as db:
+            db.execute(
+                "UPDATE users SET password_hash = ? WHERE phone_hash = ?",
+                (_hash_password(new_password), phone_hash),
+            )
+            # 清除登录尝试记录
+            db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (phone_hash,))
+
+    def reset_password_by_hash(self, phone_hash: str, new_password: str):
+        """通过 phone_hash 重置密码（用于忘记密码流程）"""
+        if len(new_password) < 6:
+            raise HTTPException(status_code=422, detail="密码至少 6 位")
+        with get_db() as db:
+            db.execute(
+                "UPDATE users SET password_hash = ? WHERE phone_hash = ?",
+                (_hash_password(new_password), phone_hash),
+            )
+            db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (phone_hash,))
 
 
 # ===== 图片验证码 =====
 
-CAPTCHAS_PATH = os.path.join(DATA_DIR, "captchas.json")
-
-
 class CaptchaStore:
-    """生成和验证图片验证码"""
-
     def create(self) -> tuple[str, str]:
-        """返回 (captcha_id, base64_image)"""
-        os.makedirs(DATA_DIR, exist_ok=True)
-
         code = "".join(secrets.choice("0123456789") for _ in range(4))
         captcha_id = str(uuid.uuid4())[:8]
         expires_at = (datetime.now(timezone.utc) + timedelta(minutes=CAPTCHA_TTL_MINUTES)).isoformat()
 
         image_b64 = self._generate_image(code)
 
-        data = _read_json(CAPTCHAS_PATH)
-        data["captchas"] = data.get("captchas", {})
-        data["captchas"][captcha_id] = {"code": code, "expires_at": expires_at}
-        _atomic_write(CAPTCHAS_PATH, data)
+        with get_db() as db:
+            db.execute(
+                "INSERT INTO captchas (captcha_id, code, expires_at) VALUES (?, ?, ?)",
+                (captcha_id, code, expires_at),
+            )
 
         return captcha_id, image_b64
 
     def _generate_image(self, code: str) -> str:
-        """生成 150×40 PNG 验证码图片（4 位数字），返回 base64"""
         width, height = 150, 40
         image = Image.new("RGB", (width, height), (245, 245, 245))
         draw = ImageDraw.Draw(image)
 
-        # 随机干扰线
         for _ in range(3):
             x1 = secrets.randbelow(width)
             y1 = secrets.randbelow(height)
@@ -166,19 +206,17 @@ class CaptchaStore:
             y2 = secrets.randbelow(height)
             draw.line([(x1, y1), (x2, y2)], fill=(180, 180, 180), width=1)
 
-        # 尝试加载字体，失败则用默认
         try:
             font = ImageFont.truetype("arial.ttf", 28)
         except (IOError, OSError):
             font = ImageFont.load_default()
 
-        # 逐个写入数字，每个有随机偏移和旋转
         char_images = []
         for ch in code:
             char_img = Image.new("RGBA", (28, 32), (0, 0, 0, 0))
             char_draw = ImageDraw.Draw(char_img)
             char_draw.text((4, 1), ch, fill=(50, 50, 50), font=font)
-            angle = secrets.randbelow(40) - 20  # -20 ~ 20 度
+            angle = secrets.randbelow(40) - 20
             rotated = char_img.rotate(angle, expand=1, fillcolor=(0, 0, 0, 0))
             char_images.append(rotated)
 
@@ -193,86 +231,88 @@ class CaptchaStore:
         return base64.b64encode(buf.getvalue()).decode()
 
     def verify(self, captcha_id: str, code: str) -> bool:
-        """验证验证码。一次有效，无论成功失败都消耗。"""
-        data = _read_json(CAPTCHAS_PATH)
-        captchas = data.get("captchas", {})
+        with get_db() as db:
+            row = db.execute(
+                "SELECT code, expires_at FROM captchas WHERE captcha_id = ?", (captcha_id,)
+            ).fetchone()
+            db.execute("DELETE FROM captchas WHERE captcha_id = ?", (captcha_id,))
 
-        entry = captchas.pop(captcha_id, None)
-        _atomic_write(CAPTCHAS_PATH, data)
-
-        if entry is None:
+        if row is None:
             return False
 
-        expires_at = datetime.fromisoformat(entry["expires_at"])
+        expires_at = datetime.fromisoformat(row["expires_at"])
         if datetime.now(timezone.utc) > expires_at:
             return False
 
-        return entry["code"] == code.strip()
+        return row["code"] == code.strip()
 
 
 # ===== 登录频率限制 =====
 
-ATTEMPTS_PATH = os.path.join(DATA_DIR, "login_attempts.json")
-
-
 class LoginRateLimiter:
-    def _get_key(self, phone: str) -> str:
-        return _hash_phone(phone)
-
     def record_failure(self, phone: str) -> dict:
-        """记录登录失败。返回 {locked, remaining_attempts, locked_until}"""
-        data = _read_json(ATTEMPTS_PATH)
-        key = self._get_key(phone)
-
+        phone_hash = _hash_phone(phone)
         now = datetime.now(timezone.utc)
-        entry = data.get("attempts", {}).get(key)
 
-        if not entry:
-            entry = {"count": 0, "first_attempt_at": now.isoformat(), "locked_until": None}
+        with get_db() as db:
+            row = db.execute(
+                "SELECT count, first_attempt_at, locked_until FROM login_attempts WHERE phone_hash = ?",
+                (phone_hash,),
+            ).fetchone()
 
-        # 检查是否已经锁定
-        if entry.get("locked_until"):
-            locked_until = datetime.fromisoformat(entry["locked_until"])
-            if now < locked_until:
-                remaining = int((locked_until - now).total_seconds() // 60)
-                return {"locked": True, "remaining_attempts": 0, "locked_until": locked_until.isoformat(), "remaining_minutes": remaining}
-            else:
-                # 锁定过期，重置计数器但不删除（防止反复触发锁）
-                entry = {"count": 0, "first_attempt_at": now.isoformat(), "locked_until": None}
+            count = 0
+            first_attempt_at = now.isoformat()
+            locked_until = None
 
-        entry["count"] += 1
+            if row:
+                # 检查是否在锁定中
+                if row["locked_until"]:
+                    lu = datetime.fromisoformat(row["locked_until"])
+                    if now < lu:
+                        remaining = int((lu - now).total_seconds() // 60)
+                        return {
+                            "locked": True, "remaining_attempts": 0,
+                            "locked_until": row["locked_until"],
+                            "remaining_minutes": remaining,
+                        }
+                    # 锁定已过期，重置
+                    count = 0
+                    first_attempt_at = now.isoformat()
+                    locked_until = None
+                else:
+                    count = row["count"]
+                    first_attempt_at = row["first_attempt_at"]
 
-        if entry["count"] >= MAX_LOGIN_ATTEMPTS:
-            locked_until = now + timedelta(hours=LOCKOUT_HOURS)
-            entry["locked_until"] = locked_until.isoformat()
+            count += 1
 
-        data.setdefault("attempts", {})
-        data["attempts"][key] = entry
-        _atomic_write(ATTEMPTS_PATH, data)
+            if count >= MAX_LOGIN_ATTEMPTS:
+                locked_until = (now + timedelta(hours=LOCKOUT_HOURS)).isoformat()
 
-        remaining = MAX_LOGIN_ATTEMPTS - entry["count"]
+            db.execute(
+                "INSERT OR REPLACE INTO login_attempts (phone_hash, count, first_attempt_at, locked_until) VALUES (?, ?, ?, ?)",
+                (phone_hash, count, first_attempt_at, locked_until),
+            )
+
         return {
-            "locked": bool(entry.get("locked_until")),
-            "remaining_attempts": max(0, remaining),
-            "locked_until": entry.get("locked_until"),
-            "remaining_minutes": int(LOCKOUT_HOURS * 60) if entry.get("locked_until") else 0,
+            "locked": locked_until is not None,
+            "remaining_attempts": max(0, MAX_LOGIN_ATTEMPTS - count),
+            "locked_until": locked_until,
+            "remaining_minutes": int(LOCKOUT_HOURS * 60) if locked_until else 0,
         }
 
     def record_success(self, phone: str):
-        """登录成功，清除尝试记录"""
-        data = _read_json(ATTEMPTS_PATH)
-        key = self._get_key(phone)
-        data.setdefault("attempts", {})
-        data["attempts"].pop(key, None)
-        _atomic_write(ATTEMPTS_PATH, data)
+        phone_hash = _hash_phone(phone)
+        with get_db() as db:
+            db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (phone_hash,))
 
     def check_locked(self, phone: str) -> bool:
-        data = _read_json(ATTEMPTS_PATH)
-        key = self._get_key(phone)
-        entry = data.get("attempts", {}).get(key)
-        if entry and entry.get("locked_until"):
-            locked_until = datetime.fromisoformat(entry["locked_until"])
-            return datetime.now(timezone.utc) < locked_until
+        phone_hash = _hash_phone(phone)
+        with get_db() as db:
+            row = db.execute(
+                "SELECT locked_until FROM login_attempts WHERE phone_hash = ?", (phone_hash,)
+            ).fetchone()
+        if row and row["locked_until"]:
+            return datetime.now(timezone.utc) < datetime.fromisoformat(row["locked_until"])
         return False
 
 
@@ -286,6 +326,17 @@ class AuthService:
             "phone": phone_masked,
             "iat": int(time.time()),
             "exp": int(time.time()) + JWT_EXPIRY_HOURS * 3600,
+        }
+        return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+    @staticmethod
+    def create_reset_token(phone_hash: str) -> str:
+        """生成短时密保重置令牌（5 分钟有效）"""
+        payload = {
+            "type": "reset",
+            "phone_hash": phone_hash,
+            "iat": int(time.time()),
+            "exp": int(time.time()) + FORGOT_PASSWORD_EXPIRY,
         }
         return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
@@ -307,7 +358,6 @@ bearer_scheme = HTTPBearer(auto_error=False)
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),
 ) -> str:
-    """从 JWT 中提取 user_id。所有需要认证的接口通过 Depends() 使用。"""
     if credentials is None:
         raise HTTPException(status_code=401, detail="未登录")
     payload = AuthService.validate_token(credentials.credentials)

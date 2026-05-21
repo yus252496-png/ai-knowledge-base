@@ -9,10 +9,18 @@ from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
 from config import DASHSCOPE_API_KEY, LLM_MODEL, UPLOAD_DIR, USER_DATA_DIR
-from auth import UserStore, CaptchaStore, LoginRateLimiter, AuthService, get_current_user
+from auth import UserStore, CaptchaStore, LoginRateLimiter, AuthService, get_current_user, SECURITY_QUESTIONS, _hash_phone
+from database import init_db
+from contextlib import asynccontextmanager
 
 
-app = FastAPI(title="知识库问答系统")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="知识库问答系统", lifespan=lifespan)
 
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
@@ -59,10 +67,52 @@ async def health():
 # ===== 认证模块 =====
 
 @app.post("/api/auth/register")
-async def register(phone: str = Form(...), password: str = Form(...)):
-    user = user_store.register(phone, password)
+async def register(phone: str = Form(...), password: str = Form(...), security_question: str = Form(...), security_answer: str = Form(...)):
+    user = user_store.register(phone, password, security_question, security_answer)
     token = AuthService.create_token(user["id"], user["phone_masked"])
     return {"token": token, "user_id": user["id"], "phone_masked": user["phone_masked"]}
+
+
+@app.get("/api/auth/security-questions")
+async def get_security_questions():
+    return {"questions": SECURITY_QUESTIONS}
+
+
+@app.post("/api/auth/forgot-password")
+async def forgot_password(phone: str = Form(...)):
+    """第一步：验证手机号是否存在，返回密保问题"""
+    user = user_store.get_user_by_phone(phone)
+    if user is None:
+        return {"error": "not_found", "detail": "该手机号未注册"}
+    if not user.get("security_question"):
+        return {"error": "no_security", "detail": "该账号未设置密保问题"}
+    return {
+        "phone_masked": user["phone_masked"],
+        "security_question": user["security_question"],
+    }
+
+
+@app.post("/api/auth/verify-security")
+async def verify_security(phone: str = Form(...), answer: str = Form(...)):
+    """第二步：验证密保答案，返回重置令牌"""
+    if not user_store.verify_security_answer(phone, answer):
+        return {"error": "wrong_answer", "detail": "密保答案错误"}
+
+    phone_hash = _hash_phone(phone)
+    reset_token = AuthService.create_reset_token(phone_hash)
+    return {"reset_token": reset_token}
+
+
+@app.post("/api/auth/reset-password")
+async def reset_password(reset_token: str = Form(...), new_password: str = Form(...)):
+    """第三步：用重置令牌修改密码"""
+    payload = AuthService.validate_token(reset_token)
+    if payload is None or payload.get("type") != "reset":
+        raise HTTPException(status_code=400, detail="重置链接已过期或无效")
+
+    phone_hash = payload["phone_hash"]
+    user_store.reset_password_by_hash(phone_hash, new_password)
+    return {"status": "ok", "detail": "密码已重置"}
 
 
 @app.get("/api/auth/captcha")

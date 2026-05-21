@@ -51,6 +51,9 @@
         <button type="submit" class="auth-btn" :disabled="!canSubmit || loading">
           {{ loading ? '登录中...' : '登录' }}
         </button>
+        <div class="forgot-link">
+          <router-link to="/forgot-password">忘记密码？</router-link>
+        </div>
       </form>
       <div class="auth-link">
         还没有账户？<router-link to="/register">立即注册</router-link>
@@ -242,4 +245,14 @@ onMounted(() => {
   font-weight: 500;
 }
 .auth-link a:hover { text-decoration: underline; }
+.forgot-link {
+  text-align: center;
+  margin-top: 12px;
+  font-size: 12px;
+}
+.forgot-link a {
+  color: #888;
+  text-decoration: none;
+}
+.forgot-link a:hover { color: #1f1f1f; text-decoration: underline; }
 </style>
