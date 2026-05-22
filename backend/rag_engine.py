@@ -12,11 +12,7 @@ from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_
 
 class RAGEngine:
     def __init__(self, user_id: str = None):
-        self.embeddings = OpenAIEmbeddings(
-            model=EMBEDDING_MODEL,
-            api_key=LLM_API_KEY,
-            base_url=LLM_BASE_URL,
-        )
+        self._embeddings = None
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -37,6 +33,19 @@ class RAGEngine:
         self.meta_path = os.path.join(self.chroma_dir, "metadata.json")
         self._store = None  # 延迟初始化
 
+    def _get_embeddings(self):
+        if self._embeddings is None:
+            if not LLM_API_KEY:
+                raise RuntimeError(
+                    "LLM_API_KEY 未配置，请在环境变量中设置。"
+                )
+            self._embeddings = OpenAIEmbeddings(
+                model=EMBEDDING_MODEL,
+                openai_api_key=LLM_API_KEY,
+                openai_api_base=LLM_BASE_URL,
+            )
+        return self._embeddings
+
     def _get_store(self):
         if self._store is None:
             self._store = self._load_or_create_store()
@@ -47,14 +56,14 @@ class RAGEngine:
         if os.path.exists(index_path):
             try:
                 return FAISS.load_local(
-                    self.chroma_dir, self.embeddings,
+                    self.chroma_dir, self._get_embeddings(),
                     allow_dangerous_deserialization=True,
                 )
             except Exception as e:
                 print(f"FAISS 加载失败，将重建索引：{e}")
         dummy = Document(page_content="init", metadata={"source": "_init_"})
         try:
-            store = FAISS.from_documents([dummy], self.embeddings)
+            store = FAISS.from_documents([dummy], self._get_embeddings())
             store.save_local(self.chroma_dir)
             return store
         except Exception as e:
@@ -95,8 +104,8 @@ class RAGEngine:
     def _build_llm(self, **kwargs):
         return ChatOpenAI(
             model=LLM_MODEL,
-            api_key=LLM_API_KEY,
-            base_url=LLM_BASE_URL,
+            openai_api_key=LLM_API_KEY,
+            openai_api_base=LLM_BASE_URL,
             temperature=0.3,
             **kwargs,
         )
@@ -245,7 +254,7 @@ class RAGEngine:
         meta = self._load_metadata()
         dummy = Document(page_content="init", metadata={"source": "_init_"})
         try:
-            self._store = FAISS.from_documents([dummy], self.embeddings)
+            self._store = FAISS.from_documents([dummy], self._get_embeddings())
         except Exception as e:
             raise RuntimeError(f"向量引擎重建失败：{e}")
 
