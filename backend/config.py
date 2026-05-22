@@ -35,3 +35,6 @@ JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "3"))
 LOCKOUT_HOURS = int(os.getenv("LOCKOUT_HOURS", "1"))
 CAPTCHA_TTL_MINUTES = int(os.getenv("CAPTCHA_TTL_MINUTES", "5"))
+
+# 数据库：Railway 会自动注入 DATABASE_URL（PostgreSQL）
+DATABASE_URL = os.getenv("DATABASE_URL", "")

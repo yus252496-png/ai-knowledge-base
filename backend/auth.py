@@ -412,10 +412,12 @@ class LoginRateLimiter:
             if count >= MAX_LOGIN_ATTEMPTS:
                 locked_until = (now + timedelta(hours=LOCKOUT_HOURS)).isoformat()
 
-            db.execute(
-                "INSERT OR REPLACE INTO login_attempts (phone_hash, count, first_attempt_at, locked_until) VALUES (?, ?, ?, ?)",
-                (phone_hash, count, first_attempt_at, locked_until),
-            )
+            db.insert_or_replace("login_attempts", "phone_hash", {
+                "phone_hash": phone_hash,
+                "count": count,
+                "first_attempt_at": first_attempt_at,
+                "locked_until": locked_until,
+            })
 
         return {
             "locked": locked_until is not None,
