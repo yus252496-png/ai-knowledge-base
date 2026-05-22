@@ -1,6 +1,7 @@
 import os
 import uuid
 import json
+import threading
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,6 +45,7 @@ frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[frontend_url, "http://localhost:5173", "http://localhost:3000"],
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,12 +53,20 @@ app.add_middleware(
 
 # 引擎缓存（每个用户独立）
 _engines: dict[str, RAGEngine] = {}
+_engine_locks: dict[str, threading.Lock] = {}
 
 def get_engine(user_id: str = None) -> RAGEngine:
     key = user_id or "__global__"
     if key not in _engines:
         _engines[key] = RAGEngine(user_id)
     return _engines[key]
+
+def _get_engine_lock(user_id: str) -> threading.Lock:
+    """每个用户独立的 FAISS 写入锁，防止并发索引竞争"""
+    key = user_id or "__global__"
+    if key not in _engine_locks:
+        _engine_locks[key] = threading.Lock()
+    return _engine_locks[key]
 
 # ===== 认证服务实例已移到 auth.py =====
 
@@ -197,15 +207,35 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_c
     with open(file_path, "wb") as f:
         f.write(content)
 
-    try:
-        result = engine.process_pdf(file_path, doc_id, original_name=original_name, pdf_bytes=content)
-        return result
-    except Exception as e:
-        if os.path.exists(file_path):
-            os.remove(file_path)
-        # 恢复引擎状态，避免内存中的脏索引影响后续请求
-        engine._store = None
-        raise HTTPException(status_code=500, detail=f"PDF 处理失败：{str(e)}")
+    # 1. 先保存元数据和 PDF 到 PG（立即持久化）
+    meta = engine._load_metadata()
+    meta["documents"][doc_id] = {
+        "file_name": original_name,
+        "total_pages": 0,
+        "total_chunks": 0,
+    }
+    engine._save_metadata(meta)
+    engine._pg_save_pdf(doc_id, content)
+
+    # 2. 后台处理 FAISS 索引（可能耗时较长，避免 Railway 30s 超时）
+    lock = _get_engine_lock(user_id)
+
+    def _bg_process():
+        with lock:
+            try:
+                bg_engine = RAGEngine(user_id)
+                bg_engine.process_pdf(file_path, doc_id, original_name=original_name, pdf_bytes=content)
+                # 通知缓存的引擎下次重新加载
+                cached = _engines.get(user_id)
+                if cached:
+                    cached._store = None
+            except Exception as e:
+                print(f"后台索引失败 {doc_id}: {e}")
+
+    t = threading.Thread(target=_bg_process, daemon=True)
+    t.start()
+
+    return {"doc_id": doc_id, "file_name": original_name, "status": "processing"}
 
 
 @app.get("/api/documents")
