@@ -406,6 +406,33 @@ if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
 
+# ===== 存储诊断（调试用） =====
+
+@app.get("/api/debug/storage")
+async def debug_storage():
+    import config as cfg
+    result = {
+        "data_dir": cfg.DATA_DIR,
+        "data_dir_exists": os.path.exists(cfg.DATA_DIR),
+        "root_data_exists": os.path.exists("/data"),
+        "db_path": os.path.join(cfg.DATA_DIR, "ai_knowledge.db"),
+        "db_exists": os.path.exists(os.path.join(cfg.DATA_DIR, "ai_knowledge.db")),
+        "cwd": os.getcwd(),
+        "data_dir_contents": [],
+    }
+    if os.path.exists(cfg.DATA_DIR):
+        try:
+            result["data_dir_contents"] = os.listdir(cfg.DATA_DIR)
+        except PermissionError:
+            result["data_dir_contents"] = ["<permission denied>"]
+    if os.path.exists("/data") and "/data" != cfg.DATA_DIR:
+        try:
+            result["root_data_contents"] = os.listdir("/data")
+        except PermissionError:
+            result["root_data_contents"] = ["<permission denied>"]
+    return result
+
+
 # ===== 解锁账号（临时调试用） =====
 
 @app.post("/api/debug/unlock")
