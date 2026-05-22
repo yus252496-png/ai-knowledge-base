@@ -121,17 +121,17 @@ class UserStore:
 
         return {"id": user_id, "phone_masked": _mask_phone(phone)}
 
-    def authenticate(self, phone: str, password: str) -> str | None:
+    def authenticate(self, phone: str, password: str) -> str | None | bool:
         phone_hash = _hash_phone(phone)
         with get_db() as db:
             row = db.execute(
                 "SELECT user_id, password_hash FROM users WHERE phone_hash = ?", (phone_hash,)
             ).fetchone()
         if row is None:
-            return None
+            return None  # 手机号未注册
         if _verify_password(password, row["password_hash"]):
-            return row["user_id"]
-        return None
+            return row["user_id"]  # 成功
+        return False  # 密码错误
 
     def get_user(self, user_id: str) -> dict | None:
         with get_db() as db:

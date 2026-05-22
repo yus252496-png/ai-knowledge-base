@@ -136,10 +136,12 @@ async def login(phone: str = Form(...), password: str = Form(...), captcha_id: s
     # 3. 验证身份
     user_id = user_store.authenticate(phone, password)
     if user_id is None:
+        return {"error": "not_registered", "detail": "该手机号未注册，请先注册"}
+    if user_id is False:
         result = rate_limiter.record_failure(phone)
         if result["locked"]:
             return {"error": "locked", "detail": "密码错误次数过多，账号已锁定 1 小时", "remaining_minutes": result["remaining_minutes"]}
-        return {"error": "login_failed", "detail": f"手机号或密码错误，还剩 {result['remaining_attempts']} 次机会"}
+        return {"error": "login_failed", "detail": f"密码错误，还剩 {result['remaining_attempts']} 次机会"}
 
     # 4. 成功
     rate_limiter.record_success(phone)

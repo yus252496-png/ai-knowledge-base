@@ -113,6 +113,10 @@ async function handleLogin() {
       errorMsg.value = res.data.detail || '手机号或密码错误'
       captchaCode.value = ''
       await loadCaptcha()
+    } else if (res.data.error === 'not_registered') {
+      errorMsg.value = '该手机号未注册，请先注册'
+      captchaCode.value = ''
+      await loadCaptcha()
     } else if (res.data.token) {
       authState.login(res.data.token, res.data.user_id, res.data.phone_masked, res.data.role)
       router.push('/')
