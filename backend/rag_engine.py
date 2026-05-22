@@ -10,6 +10,7 @@ from langchain_core.embeddings import Embeddings
 from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 from database import get_db
+from datetime import datetime
 
 
 class _LocalEmbeddings(Embeddings):
@@ -68,7 +69,19 @@ class RAGEngine:
                     allow_dangerous_deserialization=True,
                 )
             except Exception as e:
-                print(f"FAISS 加载失败，将重建索引：{e}")
+                print(f"FAISS 加载失败({e})，将重建索引")
+        # 本地无 FAISS 索引时，尝试从 PG 恢复 PDF 并重建
+        if self.user_id and self._try_restore_from_pg():
+            self._rebuild_index()
+            self._persist()
+            if os.path.exists(index_path):
+                try:
+                    return FAISS.load_local(
+                        self.chroma_dir, self._get_embeddings(),
+                        allow_dangerous_deserialization=True,
+                    )
+                except Exception as e:
+                    print(f"FAISS 恢复后仍加载失败：{e}")
         dummy = Document(page_content="init", metadata={"source": "_init_"})
         try:
             store = FAISS.from_documents([dummy], self._get_embeddings())
@@ -76,6 +89,37 @@ class RAGEngine:
             return store
         except Exception as e:
             raise RuntimeError(f"向量引擎初始化失败，请检查嵌入模型配置：{e}")
+
+    def _try_restore_from_pg(self) -> bool:
+        """从 PostgreSQL 恢复 PDF 文件到本地。返回是否恢复了文档。"""
+        try:
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT doc_id, file_name, pdf_data FROM documents WHERE user_id = ? AND pdf_data IS NOT NULL",
+                    (self.user_id,),
+                ).fetchall()
+            if not rows:
+                return False
+            os.makedirs(self.upload_dir, exist_ok=True)
+            os.makedirs(self.chroma_dir, exist_ok=True)
+            count = 0
+            for r in rows:
+                pdf_bytes = r["pdf_data"]
+                if isinstance(pdf_bytes, memoryview):
+                    pdf_bytes = bytes(pdf_bytes)
+                if pdf_bytes:
+                    file_path = os.path.join(self.upload_dir, f"{r['doc_id']}.pdf")
+                    with open(file_path, "wb") as f:
+                        f.write(pdf_bytes)
+                    count += 1
+            if count:
+                print(f"已从 PG 恢复 {count} 个 PDF")
+                # 同步元数据到本地
+                self._pg_load_documents()
+            return count > 0
+        except Exception as e:
+            print(f"从 PG 恢复 PDF 失败：{e}")
+            return False
 
     def _persist(self):
         try:
@@ -100,18 +144,22 @@ class RAGEngine:
         self._pg_save_metadata(metadata)
 
     def _pg_save_metadata(self, metadata: dict):
-        """将文档元数据持久化到 PostgreSQL"""
+        """将文档元数据持久化到 PostgreSQL（不覆盖已有 pdf_data）"""
         if not self.user_id:
             return
         try:
+            now = datetime.utcnow().isoformat()
             with get_db() as db:
-                db.execute("DELETE FROM documents WHERE user_id = ?", (self.user_id,))
                 for doc_id, info in metadata.get("documents", {}).items():
                     db.execute(
                         "INSERT INTO documents (doc_id, user_id, file_name, total_pages, total_chunks, created_at) "
-                        "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                        "VALUES (?, ?, ?, ?, ?, ?) "
+                        "ON CONFLICT (doc_id, user_id) DO UPDATE SET "
+                        "file_name = EXCLUDED.file_name, "
+                        "total_pages = EXCLUDED.total_pages, "
+                        "total_chunks = EXCLUDED.total_chunks",
                         (doc_id, self.user_id, info.get("file_name", ""),
-                         info.get("total_pages", 0), info.get("total_chunks", 0)),
+                         info.get("total_pages", 0), info.get("total_chunks", 0), now),
                     )
         except Exception as e:
             print(f"PG 元数据同步失败：{e}")
@@ -340,6 +388,10 @@ class RAGEngine:
         del meta["documents"][doc_id]
         self._save_metadata(meta)
         self._pg_delete_document(doc_id)
+        # 删除本地 PDF 文件
+        file_path = os.path.join(self.upload_dir, f"{doc_id}.pdf")
+        if os.path.exists(file_path):
+            os.remove(file_path)
         self._rebuild_index()
         self._persist()
         return True

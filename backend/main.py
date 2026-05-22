@@ -346,8 +346,7 @@ async def admin_get_user(target_id: str, admin_id: str = Depends(get_current_adm
     if user is None:
         raise HTTPException(status_code=404, detail="用户不存在")
 
-    # 获取该用户的上传文件
-    user_upload_dir = os.path.join(USER_DATA_DIR, target_id, "uploads")
+    # 获取该用户的上传文件（优先从本地，备选从 PG）
     user_chroma_dir = os.path.join(USER_DATA_DIR, target_id, "chroma_db")
     meta_path = os.path.join(user_chroma_dir, "metadata.json")
     files = []
@@ -365,6 +364,26 @@ async def admin_get_user(target_id: str, admin_id: str = Depends(get_current_adm
                 for doc_id, info in meta.get("documents", {}).items()
             ]
         except (json.JSONDecodeError, OSError):
+            pass
+    # 本地没有时从 PG 恢复
+    if not files:
+        try:
+            from database import get_db
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT doc_id, file_name, total_pages, total_chunks FROM documents WHERE user_id = ?",
+                    (target_id,),
+                ).fetchall()
+            files = [
+                {
+                    "doc_id": r["doc_id"],
+                    "file_name": r["file_name"],
+                    "total_pages": r["total_pages"],
+                    "total_chunks": r["total_chunks"],
+                }
+                for r in rows
+            ]
+        except Exception:
             pass
 
     # 获取该用户的对话历史
@@ -407,11 +426,27 @@ async def admin_set_role(target_id: str, role: str = Form(...), admin_id: str = 
 
 @app.get("/api/admin/files/{target_id}/{doc_id}")
 async def admin_serve_file(target_id: str, doc_id: str, admin_id: str = Depends(get_current_admin)):
-    """提供 PDF 文件预览（浏览器内嵌）"""
+    """提供 PDF 文件预览（浏览器内嵌），本地没有时从 PG 恢复"""
     file_path = os.path.join(USER_DATA_DIR, target_id, "uploads", f"{doc_id}.pdf")
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="文件不存在")
-    return FileResponse(file_path, media_type="application/pdf", filename=f"{doc_id}.pdf")
+    if os.path.exists(file_path):
+        return FileResponse(file_path, media_type="application/pdf", filename=f"{doc_id}.pdf")
+    # 尝试从 PG 恢复
+    try:
+        from database import get_db
+        with get_db() as db:
+            row = db.execute(
+                "SELECT pdf_data FROM documents WHERE doc_id = ? AND user_id = ?",
+                (doc_id, target_id),
+            ).fetchone()
+        if row and row["pdf_data"]:
+            pdf_bytes = row["pdf_data"]
+            if isinstance(pdf_bytes, memoryview):
+                pdf_bytes = bytes(pdf_bytes)
+            from fastapi.responses import Response
+            return Response(content=pdf_bytes, media_type="application/pdf")
+    except Exception as e:
+        print(f"从 PG 恢复 PDF 预览失败：{e}")
+    raise HTTPException(status_code=404, detail="文件不存在")
 
 
 if __name__ == "__main__":
