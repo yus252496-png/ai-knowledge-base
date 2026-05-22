@@ -791,4 +791,66 @@ onMounted(async () => {
 .auth-btn:hover { opacity: 0.85; }
 .auth-btn:disabled { opacity: 0.3; cursor: not-allowed; }
 .loading { text-align: center; padding: 40px; color: #bbb; }
+
+/* ===== 移动端适配 ===== */
+@media (max-width: 768px) {
+  .admin-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .header-left h2 { font-size: 14px; }
+  .header-right {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .search-input {
+    width: 100%;
+    flex: 1;
+    min-width: 0;
+  }
+  .admin-body {
+    padding: 10px 8px;
+  }
+  .user-table {
+    font-size: 12px;
+  }
+  .user-table th,
+  .user-table td {
+    padding: 8px 8px;
+  }
+  .user-table td:last-child {
+    min-width: 180px;
+  }
+  .actions {
+    gap: 4px;
+  }
+  .actions .btn-sm {
+    padding: 3px 7px;
+    font-size: 10px;
+  }
+  /* 表格容器横向滚动 */
+  .admin-body {
+    overflow-x: auto;
+  }
+  .user-table {
+    min-width: 600px;
+  }
+  /* 弹窗全屏 */
+  .modal {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: 100vh !important;
+    height: 100vh;
+    border-radius: 0;
+    margin: 0;
+  }
+  .modal-overlay {
+    align-items: flex-end;
+  }
+  .info-grid {
+    grid-template-columns: 1fr;
+  }
+}
 </style>

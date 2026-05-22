@@ -1,7 +1,8 @@
 <template>
   <div class="app-container">
-    <!-- 侧栏 -->
-    <aside class="sidebar">
+    <!-- 侧栏（移动端：遮罩 + 抽屉） -->
+    <div v-if="showSidebar" class="sidebar-backdrop" @click="showSidebar = false"></div>
+    <aside class="sidebar" :class="{ 'sidebar--open': showSidebar }">
       <!-- 会话列表 -->
       <div class="section">
         <div class="section-header">
@@ -58,7 +59,10 @@
     <!-- 主区域 -->
     <main class="main-area">
       <div class="chat-header">
-        <h1>{{ currentTitle }}</h1>
+        <div class="chat-header-left">
+          <button class="btn-menu" @click="showSidebar = !showSidebar" title="菜单">☰</button>
+          <h1>{{ currentTitle }}</h1>
+        </div>
         <span class="doc-count">{{ documents.length }} 个文档</span>
       </div>
       <div class="messages" ref="messagesRef">
@@ -120,6 +124,7 @@ const loading = ref(false)
 const uploading = ref(false)
 const uploadProgress = ref(0)
 const messagesRef = ref(null)
+const showSidebar = ref(false)
 
 const phone = computed(() => authState.phone.value)
 const isAdmin = computed(() => authState.isAdmin.value)
@@ -184,6 +189,7 @@ async function loadActiveConversation() {
 }
 
 async function newConversation() {
+  showSidebar.value = false
   try {
     const res = await createConversation()
     currentConvId.value = res.data.id
@@ -196,6 +202,7 @@ async function newConversation() {
 
 async function switchConversation(convId) {
   if (convId === currentConvId.value) return
+  showSidebar.value = false
   try {
     const res = await getConversation(convId)
     const conv = res.data
@@ -649,5 +656,68 @@ body {
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+/* ===== 移动端适配 ===== */
+.btn-menu {
+  display: none;
+  background: none;
+  border: none;
+  font-size: 20px;
+  cursor: pointer;
+  color: #1f1f1f;
+  padding: 0 4px;
+  line-height: 1;
+}
+.chat-header-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.chat-header-left h1 {
+  min-width: 0;
+}
+
+@media (max-width: 768px) {
+  .btn-menu { display: inline-flex; }
+  .sidebar-backdrop {
+    display: block;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.4);
+    z-index: 999;
+  }
+  .sidebar {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    z-index: 1000;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    width: 280px;
+  }
+  .sidebar--open {
+    transform: translateX(0);
+  }
+  .chat-header {
+    padding: 10px 14px;
+  }
+  .doc-count { display: none; }
+  .messages {
+    padding: 12px 14px;
+  }
+  .message {
+    max-width: 90%;
+  }
+  .welcome {
+    padding: 40px 0;
+  }
+  .input-area {
+    padding: 8px 14px 12px;
+  }
+  .input-area button {
+    padding: 9px 14px;
+  }
 }
 </style>

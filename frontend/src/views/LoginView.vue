@@ -259,4 +259,22 @@ onMounted(() => {
   text-decoration: none;
 }
 .forgot-link a:hover { color: #1f1f1f; text-decoration: underline; }
+
+/* 移动端适配 */
+@media (max-width: 640px) {
+  .auth-card {
+    width: 100%;
+    max-width: 100%;
+    min-height: 100vh;
+    border-radius: 0;
+    box-shadow: none;
+    padding: 24px 20px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+  }
+  .auth-page {
+    align-items: stretch;
+  }
+}
 </style>
