@@ -233,9 +233,21 @@ async function loadDocuments() {
   }
 }
 
+const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+
 async function handleUpload(e) {
   const files = e.target.files
   if (!files.length) return
+
+  // 前端文件大小检查
+  for (const file of files) {
+    if (file.size > MAX_FILE_SIZE) {
+      alert(`「${file.name}」超过 20MB，请压缩后重新上传。`)
+      e.target.value = ''
+      return
+    }
+  }
+
   uploading.value = true
   for (const file of files) {
     uploadProgress.value = 0

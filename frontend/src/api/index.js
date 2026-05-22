@@ -4,7 +4,7 @@ const BASE = import.meta.env.VITE_API_URL || ''
 
 const api = axios.create({
   baseURL: `${BASE}/api`,
-  timeout: 120000,
+  timeout: 300000,
 })
 
 // JWT 请求拦截器

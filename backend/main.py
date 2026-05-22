@@ -26,6 +26,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="知识库问答系统", lifespan=lifespan)
 
+# 限制上传文件最大 20MB（后端二次校验）
+MAX_FILE_SIZE = 20 * 1024 * 1024
+
 
 # 全局异常处理，返回具体错误信息
 @app.exception_handler(Exception)
@@ -187,6 +190,10 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_c
     original_name = file.filename
 
     content = await file.read()
+
+    if len(content) > MAX_FILE_SIZE:
+        raise HTTPException(status_code=400, detail=f"文件超过 20MB 限制，当前文件大小：{len(content) / 1024 / 1024:.1f}MB")
+
     with open(file_path, "wb") as f:
         f.write(content)
 
