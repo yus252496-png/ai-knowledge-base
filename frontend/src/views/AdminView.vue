@@ -31,7 +31,7 @@
             <td class="actions">
               <button class="btn-sm" @click="viewDetail(u.id)">详情</button>
               <button class="btn-sm" @click="openEdit(u)">编辑</button>
-              <button class="btn-sm btn-danger" @click="confirmDelete(u)" :disabled="u.id === myUserId">删除</button>
+              <button v-if="u.role !== 'super_admin'" class="btn-sm btn-danger" @click="confirmDelete(u)" :disabled="u.id === myUserId">删除</button>
               <button v-if="isSuperAdmin && u.id !== myUserId" class="btn-sm btn-role" @click="toggleRole(u)">
                 {{ u.role === 'admin' ? '取消管理员' : '设为管理员' }}
               </button>

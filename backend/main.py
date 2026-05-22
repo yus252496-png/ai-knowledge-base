@@ -452,6 +452,9 @@ async def admin_update_user(target_id: str, data: dict, admin_id: str = Depends(
 async def admin_delete_user(target_id: str, admin_id: str = Depends(get_current_admin)):
     if target_id == admin_id:
         raise HTTPException(status_code=400, detail="不能删除自己")
+    target_role = user_store.get_role(target_id)
+    if target_role == "super_admin":
+        raise HTTPException(status_code=403, detail="不能删除超级管理员")
     success = user_store.delete_user(target_id)
     if not success:
         raise HTTPException(status_code=404, detail="用户不存在")
