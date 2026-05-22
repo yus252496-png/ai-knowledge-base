@@ -5,6 +5,7 @@ import hashlib
 import secrets
 import base64
 import io
+import os
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -314,28 +315,32 @@ class CaptchaStore:
         return captcha_id, image_b64
 
     def _generate_image(self, code: str) -> str:
-        width, height = 150, 40
+        width, height = 180, 50
         image = Image.new("RGB", (width, height), (245, 245, 245))
         draw = ImageDraw.Draw(image)
 
-        for _ in range(3):
+        for _ in range(4):
             x1 = secrets.randbelow(width)
             y1 = secrets.randbelow(height)
             x2 = secrets.randbelow(width)
             y2 = secrets.randbelow(height)
             draw.line([(x1, y1), (x2, y2)], fill=(180, 180, 180), width=1)
 
+        _font_path = os.path.join(os.path.dirname(__file__), "DejaVuSans-Bold.ttf")
         try:
-            font = ImageFont.truetype("arial.ttf", 28)
+            font = ImageFont.truetype(_font_path, 32)
         except (IOError, OSError):
-            font = ImageFont.load_default()
+            try:
+                font = ImageFont.truetype("arial.ttf", 32)
+            except (IOError, OSError):
+                font = ImageFont.load_default(size=28)
 
         char_images = []
         for ch in code:
-            char_img = Image.new("RGBA", (28, 32), (0, 0, 0, 0))
+            char_img = Image.new("RGBA", (32, 36), (0, 0, 0, 0))
             char_draw = ImageDraw.Draw(char_img)
             char_draw.text((4, 1), ch, fill=(50, 50, 50), font=font)
-            angle = secrets.randbelow(40) - 20
+            angle = secrets.randbelow(30) - 15
             rotated = char_img.rotate(angle, expand=1, fillcolor=(0, 0, 0, 0))
             char_images.append(rotated)
 
