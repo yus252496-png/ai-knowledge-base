@@ -13,10 +13,10 @@ CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 
 # Railway 有 /data 持久目录时就用它，否则用用户目录
-if os.path.exists("/data"):
-    DATA_DIR = "/data/ai-kb-data"
-else:
-    DATA_DIR = os.path.join(os.path.expanduser("~"), "ai-kb-data")
+# 可通过 DATA_DIR 环境变量强制指定
+DATA_DIR = os.getenv("DATA_DIR") or (
+    "/data/ai-kb-data" if os.path.exists("/data") else os.path.join(os.path.expanduser("~"), "ai-kb-data")
+)
 
 UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
 CHROMA_DIR = os.path.join(DATA_DIR, "chroma_db")
