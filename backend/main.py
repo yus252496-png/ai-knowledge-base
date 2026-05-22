@@ -3,14 +3,14 @@ import uuid
 import json
 import dashscope
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
 from config import DASHSCOPE_API_KEY, LLM_MODEL, UPLOAD_DIR, USER_DATA_DIR
 from auth import user_store, captcha_store, rate_limiter, AuthService, get_current_user, get_current_admin, SECURITY_QUESTIONS, SUPER_ADMIN_PHONE, _hash_phone
-from database import init_db
+from database import init_db, USE_PG
 from contextlib import asynccontextmanager
 
 
@@ -26,6 +26,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="知识库问答系统", lifespan=lifespan)
+
+
+# 全局异常处理，返回具体错误信息
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    import traceback
+    return JSONResponse(
+        status_code=500,
+        content={"error": str(exc), "traceback": traceback.format_exc().split("\n")[-5:]},
+    )
+
 
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
@@ -431,6 +442,26 @@ async def debug_storage():
         except PermissionError:
             result["root_data_contents"] = ["<permission denied>"]
     return result
+
+
+@app.get("/api/debug/db")
+async def debug_db():
+    """测试数据库连接（不需要认证）"""
+    from database import get_db
+    try:
+        with get_db() as db:
+            db.execute("SELECT 1")
+            if USE_PG:
+                rows = db.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'").fetchall()
+            else:
+                rows = db.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+            tables = [list(r.values())[0] for r in rows] if rows else []
+        from config import DATABASE_URL
+        return {"status": "ok", "use_pg": USE_PG, "has_database_url": bool(DATABASE_URL), "tables": tables}
+    except Exception as e:
+        import traceback
+        from config import DATABASE_URL
+        return {"status": "error", "use_pg": USE_PG, "has_database_url": bool(DATABASE_URL), "error": str(e), "traceback": traceback.format_exc().split("\n")[-5:]}
 
 
 # ===== 解锁账号（临时调试用） =====
