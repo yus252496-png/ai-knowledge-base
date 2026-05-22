@@ -198,11 +198,13 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_c
         f.write(content)
 
     try:
-        result = engine.process_pdf(file_path, doc_id, original_name=original_name)
+        result = engine.process_pdf(file_path, doc_id, original_name=original_name, pdf_bytes=content)
         return result
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
+        # 恢复引擎状态，避免内存中的脏索引影响后续请求
+        engine._store = None
         raise HTTPException(status_code=500, detail=f"PDF 处理失败：{str(e)}")
 
 

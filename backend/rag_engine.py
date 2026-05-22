@@ -9,6 +9,7 @@ from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.embeddings import Embeddings
 from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
+from database import get_db
 
 
 class _LocalEmbeddings(Embeddings):
@@ -27,6 +28,7 @@ class _LocalEmbeddings(Embeddings):
 class RAGEngine:
     def __init__(self, user_id: str = None):
         self._embeddings = None
+        self.user_id = user_id
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
             chunk_overlap=CHUNK_OVERLAP,
@@ -94,6 +96,58 @@ class RAGEngine:
         os.makedirs(self.chroma_dir, exist_ok=True)
         with open(self.meta_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, ensure_ascii=False, indent=2)
+        # 同步到 PostgreSQL，确保重启后不丢失
+        self._pg_save_metadata(metadata)
+
+    def _pg_save_metadata(self, metadata: dict):
+        """将文档元数据持久化到 PostgreSQL"""
+        if not self.user_id:
+            return
+        try:
+            with get_db() as db:
+                db.execute("DELETE FROM documents WHERE user_id = ?", (self.user_id,))
+                for doc_id, info in metadata.get("documents", {}).items():
+                    db.execute(
+                        "INSERT INTO documents (doc_id, user_id, file_name, total_pages, total_chunks, created_at) "
+                        "VALUES (?, ?, ?, ?, ?, datetime('now'))",
+                        (doc_id, self.user_id, info.get("file_name", ""),
+                         info.get("total_pages", 0), info.get("total_chunks", 0)),
+                    )
+        except Exception as e:
+            print(f"PG 元数据同步失败：{e}")
+
+    def _pg_delete_document(self, doc_id: str):
+        """从 PostgreSQL 删除文档"""
+        if not self.user_id:
+            return
+        try:
+            with get_db() as db:
+                db.execute("DELETE FROM documents WHERE doc_id = ? AND user_id = ?", (doc_id, self.user_id))
+        except Exception as e:
+            print(f"PG 文档删除失败：{e}")
+
+    def _pg_clear_documents(self):
+        """清空 PostgreSQL 中的文档"""
+        if not self.user_id:
+            return
+        try:
+            with get_db() as db:
+                db.execute("DELETE FROM documents WHERE user_id = ?", (self.user_id,))
+        except Exception as e:
+            print(f"PG 文档清空失败：{e}")
+
+    def _pg_save_pdf(self, doc_id: str, pdf_bytes: bytes):
+        """将 PDF 二进制内容存入 PostgreSQL"""
+        if not self.user_id:
+            return
+        try:
+            with get_db() as db:
+                db.execute(
+                    "UPDATE documents SET pdf_data = ? WHERE doc_id = ? AND user_id = ?",
+                    (pdf_bytes, doc_id, self.user_id),
+                )
+        except Exception as e:
+            print(f"PG PDF 存储失败：{e}")
 
     def _extract_pdf_text(self, file_path: str) -> list:
         reader = PdfReader(file_path)
@@ -116,7 +170,7 @@ class RAGEngine:
             **kwargs,
         )
 
-    def process_pdf(self, file_path: str, doc_id: str, original_name: str = None) -> dict:
+    def process_pdf(self, file_path: str, doc_id: str, original_name: str = None, pdf_bytes: bytes = None) -> dict:
         pages = self._extract_pdf_text(file_path)
         if not pages:
             raise ValueError("未能从 PDF 中提取到文本内容")
@@ -132,9 +186,14 @@ class RAGEngine:
 
         store = self._get_store()
         batch_size = 10
-        for i in range(0, len(chunks), batch_size):
-            store.add_documents(chunks[i:i + batch_size])
-        self._persist()
+        try:
+            for i in range(0, len(chunks), batch_size):
+                store.add_documents(chunks[i:i + batch_size])
+            self._persist()
+        except Exception as e:
+            # 失败时重置 store，下次访问从磁盘重新加载
+            self._store = None
+            raise RuntimeError(f"向量索引写入失败：{e}")
 
         meta = self._load_metadata()
         meta["documents"][doc_id] = {
@@ -143,6 +202,10 @@ class RAGEngine:
             "total_chunks": len(chunks),
         }
         self._save_metadata(meta)
+
+        # 将 PDF 二进制存入 PostgreSQL
+        if pdf_bytes:
+            self._pg_save_pdf(doc_id, pdf_bytes)
 
         return {
             "doc_id": doc_id,
@@ -229,6 +292,10 @@ class RAGEngine:
 
     def list_documents(self) -> List[dict]:
         meta = self._load_metadata()
+        docs = meta.get("documents", {})
+        if not docs and self.user_id:
+            # metadata.json 为空时尝试从 PostgreSQL 恢复
+            docs = self._pg_load_documents()
         return [
             {
                 "doc_id": doc_id,
@@ -236,8 +303,35 @@ class RAGEngine:
                 "total_pages": info.get("total_pages", 0),
                 "total_chunks": info.get("total_chunks", 0),
             }
-            for doc_id, info in meta.get("documents", {}).items()
+            for doc_id, info in docs.items()
         ]
+
+    def _pg_load_documents(self) -> dict:
+        """从 PostgreSQL 加载文档元数据"""
+        if not self.user_id:
+            return {}
+        try:
+            with get_db() as db:
+                rows = db.execute(
+                    "SELECT doc_id, file_name, total_pages, total_chunks FROM documents WHERE user_id = ?",
+                    (self.user_id,),
+                ).fetchall()
+            result = {}
+            for r in rows:
+                result[r["doc_id"]] = {
+                    "file_name": r["file_name"],
+                    "total_pages": r["total_pages"],
+                    "total_chunks": r["total_chunks"],
+                }
+            if result:
+                # 同步回文件系统
+                meta = self._load_metadata()
+                meta["documents"] = result
+                self._save_metadata(meta)
+            return result
+        except Exception as e:
+            print(f"PG 文档加载失败：{e}")
+            return {}
 
     def delete_document(self, doc_id: str) -> bool:
         meta = self._load_metadata()
@@ -245,6 +339,7 @@ class RAGEngine:
             return False
         del meta["documents"][doc_id]
         self._save_metadata(meta)
+        self._pg_delete_document(doc_id)
         self._rebuild_index()
         self._persist()
         return True
@@ -253,6 +348,7 @@ class RAGEngine:
         meta = self._load_metadata()
         meta["documents"] = {}
         self._save_metadata(meta)
+        self._pg_clear_documents()
         self._rebuild_index()
         self._persist()
 

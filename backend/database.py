@@ -166,6 +166,17 @@ def _ddl_sqlite(conn):
         CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id);
         CREATE INDEX IF NOT EXISTS idx_captchas_expires ON captchas(expires_at);
+
+        CREATE TABLE IF NOT EXISTS documents (
+            doc_id TEXT,
+            user_id TEXT,
+            file_name TEXT NOT NULL,
+            total_pages INTEGER NOT NULL DEFAULT 0,
+            total_chunks INTEGER NOT NULL DEFAULT 0,
+            pdf_data BLOB,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (doc_id, user_id)
+        );
     """)
 
 
@@ -219,6 +230,17 @@ def _ddl_pg(conn):
         CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id);
         CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(conv_id);
         CREATE INDEX IF NOT EXISTS idx_captchas_expires ON captchas(expires_at);
+
+        CREATE TABLE IF NOT EXISTS documents (
+            doc_id TEXT,
+            user_id TEXT,
+            file_name TEXT NOT NULL,
+            total_pages INTEGER NOT NULL DEFAULT 0,
+            total_chunks INTEGER NOT NULL DEFAULT 0,
+            pdf_data BYTEA,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (doc_id, user_id)
+        );
     """)
 
 
