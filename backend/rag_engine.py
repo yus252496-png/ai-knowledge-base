@@ -6,7 +6,8 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from langchain_community.embeddings import FastEmbedEmbeddings
+from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 
 
@@ -39,11 +40,7 @@ class RAGEngine:
                 raise RuntimeError(
                     "LLM_API_KEY 未配置，请在环境变量中设置。"
                 )
-            self._embeddings = OpenAIEmbeddings(
-                model=EMBEDDING_MODEL,
-                openai_api_key=LLM_API_KEY,
-                openai_api_base=LLM_BASE_URL,
-            )
+            self._embeddings = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
         return self._embeddings
 
     def _get_store(self):
