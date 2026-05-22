@@ -79,10 +79,17 @@ export function resetPassword(resetToken, newPassword) {
 }
 
 // 文档
-export function uploadDocument(file) {
+export function uploadDocument(file, onProgress) {
   const form = new FormData()
   form.append('file', file)
-  return api.post('/upload', form)
+  return api.post('/upload', form, {
+    onUploadProgress(progressEvent) {
+      if (onProgress && progressEvent.total) {
+        const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100)
+        onProgress(pct)
+      }
+    },
+  })
 }
 export function listDocuments() {
   return api.get('/documents')

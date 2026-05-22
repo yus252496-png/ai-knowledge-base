@@ -29,8 +29,8 @@
           <span>文档管理</span>
         </div>
         <div class="upload-area">
-          <label class="upload-btn" :class="{ uploading }">
-            {{ uploading ? '上传中...' : '上传 PDF' }}
+          <label class="upload-btn" :class="{ uploading }" :style="uploadBtnStyle">
+            {{ uploading ? `上传中 ${uploadProgress}%` : '上传 PDF' }}
             <input type="file" accept=".pdf" multiple @change="handleUpload" :disabled="uploading" />
           </label>
         </div>
@@ -118,6 +118,7 @@ const currentConvId = ref(null)
 const question = ref('')
 const loading = ref(false)
 const uploading = ref(false)
+const uploadProgress = ref(0)
 const messagesRef = ref(null)
 
 const phone = computed(() => authState.phone.value)
@@ -134,6 +135,15 @@ let typewriterTimer = null
 const currentTitle = computed(() => {
   const conv = conversations.value.find(c => c.id === currentConvId.value)
   return conv ? conv.title : '知识库问答'
+})
+
+const uploadBtnStyle = computed(() => {
+  if (!uploading.value || uploadProgress.value === 0) return {}
+  return {
+    background: `linear-gradient(to right, #dbeafe ${uploadProgress.value}%, #f5f5f5 ${uploadProgress.value}%)`,
+    borderColor: uploadProgress.value === 100 ? '#22c55e' : '#93c5fd',
+    color: uploadProgress.value > 50 ? '#1e40af' : '#888',
+  }
 })
 
 function scrollToBottom() {
@@ -228,12 +238,14 @@ async function handleUpload(e) {
   if (!files.length) return
   uploading.value = true
   for (const file of files) {
+    uploadProgress.value = 0
     try {
-      await uploadDocument(file)
+      await uploadDocument(file, (pct) => { uploadProgress.value = pct })
     } catch (e) {
       console.error(`上传 ${file.name} 失败`, e)
     }
   }
+  uploadProgress.value = 0
   uploading.value = false
   e.target.value = ''
   await loadDocuments()
