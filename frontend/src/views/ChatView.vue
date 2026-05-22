@@ -391,6 +391,8 @@ body {
 .app-container {
   display: flex;
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
   background: #f7f7f8;
 }
 
@@ -543,6 +545,8 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .chat-header {
@@ -567,7 +571,9 @@ body {
 /* ===== 消息区 ===== */
 .messages {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   padding: 20px 28px;
 }
 
