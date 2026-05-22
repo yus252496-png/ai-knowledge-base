@@ -2,6 +2,7 @@ backend/.env
 backend/chroma_db/
 backend/uploads/
 backend/__pycache__/
+backend/test_runner.py
 frontend/node_modules/
 frontend/dist/
 *.pyc

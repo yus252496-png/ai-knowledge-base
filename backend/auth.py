@@ -11,12 +11,31 @@ import jwt
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from PIL import Image, ImageDraw, ImageFont
+from cryptography.fernet import Fernet
 
 from config import (
     JWT_SECRET, JWT_ALGORITHM, JWT_EXPIRY_HOURS,
-    MAX_LOGIN_ATTEMPTS, LOCKOUT_HOURS, CAPTCHA_TTL_MINUTES,
+    MAX_LOGIN_ATTEMPTS, LOCKOUT_HOURS, CAPTCHA_TTL_MINUTES, FIELD_ENCRYPT_KEY,
 )
 from database import get_db
+
+
+# ===== 字段级加密（可逆） =====
+
+_fernet = Fernet(FIELD_ENCRYPT_KEY)
+
+
+def encrypt_field(value: str) -> str:
+    return _fernet.encrypt(value.encode()).decode()
+
+
+def decrypt_field(value: str) -> str:
+    if not value:
+        return ""
+    try:
+        return _fernet.decrypt(value.encode()).decode()
+    except Exception:
+        return value  # 兼容未加密的旧数据
 
 
 # ===== 工具函数 =====
@@ -52,6 +71,11 @@ PHONE_RE = re.compile(r"^1[3-9]\d{9}$")
 def validate_phone(phone: str):
     if not PHONE_RE.match(phone):
         raise HTTPException(status_code=422, detail="手机号格式不正确")
+
+
+# ===== 超级管理员手机号 =====
+
+SUPER_ADMIN_PHONE = "17688939632"
 
 
 # ===== 密保问题 =====
@@ -91,8 +115,8 @@ class UserStore:
 
             user_id = str(uuid.uuid4())[:8]
             db.execute(
-                "INSERT INTO users (user_id, phone_hash, password_hash, phone_masked, created_at, security_question, security_answer_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (user_id, phone_hash, _hash_password(password), _mask_phone(phone), datetime.now(timezone.utc).isoformat(), security_question, answer_hash),
+                "INSERT INTO users (user_id, phone_hash, password_hash, phone_masked, phone, created_at, security_question, security_answer_hash, security_answer) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (user_id, phone_hash, _hash_password(password), _mask_phone(phone), encrypt_field(phone), datetime.now(timezone.utc).isoformat(), security_question, answer_hash, security_answer.strip()),
             )
 
         return {"id": user_id, "phone_masked": _mask_phone(phone)}
@@ -174,6 +198,101 @@ class UserStore:
                 (_hash_password(new_password), phone_hash),
             )
             db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (phone_hash,))
+
+    # ===== 管理员方法 =====
+
+    def get_role(self, user_id: str) -> str:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT role FROM users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return row["role"] if row else "user"
+
+    def set_role(self, user_id: str, role: str):
+        if role not in ("user", "admin", "super_admin"):
+            raise HTTPException(status_code=422, detail="无效的角色")
+        with get_db() as db:
+            db.execute("UPDATE users SET role = ? WHERE user_id = ?", (role, user_id))
+
+    def list_users(self, search: str = "") -> list[dict]:
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT user_id, phone_masked, phone, role, created_at, security_question, security_answer FROM users ORDER BY created_at DESC"
+            ).fetchall()
+        result = []
+        for r in rows:
+            phone = decrypt_field(r["phone"]) or r["phone_masked"]
+            if search and search not in phone:
+                continue
+            result.append({
+                "id": r["user_id"],
+                "phone": phone,
+                "phone_masked": r["phone_masked"],
+                "role": r["role"],
+                "created_at": r["created_at"],
+                "security_question": r["security_question"],
+                "security_answer": r["security_answer"] or "",
+            })
+        return result
+
+    def get_user_detail(self, user_id: str) -> dict | None:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT user_id, phone_masked, phone, role, created_at, security_question, security_answer FROM users WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["user_id"],
+            "phone": decrypt_field(row["phone"]) or row["phone_masked"],
+            "phone_masked": row["phone_masked"],
+            "role": row["role"],
+            "created_at": row["created_at"],
+            "security_question": row["security_question"],
+            "security_answer": row["security_answer"] or "",
+        }
+
+    def update_user(self, user_id: str, data: dict):
+        fields = []
+        values = []
+        if "phone" in data:
+            fields.append("phone = ?")
+            values.append(encrypt_field(data["phone"]))
+            fields.append("phone_masked = ?")
+            values.append(_mask_phone(data["phone"]))
+        if "security_question" in data:
+            fields.append("security_question = ?")
+            values.append(data["security_question"])
+            if "security_answer" in data:
+                fields.append("security_answer = ?")
+                values.append(data["security_answer"])
+        if "password" in data and data["password"]:
+            fields.append("password_hash = ?")
+            values.append(_hash_password(data["password"]))
+        if not fields:
+            return
+        values.append(user_id)
+        with get_db() as db:
+            db.execute(f"UPDATE users SET {', '.join(fields)} WHERE user_id = ?", values)
+
+    def delete_user(self, user_id: str) -> bool:
+        with get_db() as db:
+            cur = db.execute("DELETE FROM users WHERE user_id = ?", (user_id,))
+        return cur.rowcount > 0
+
+    def get_by_phone_hash(self, phone_hash: str) -> dict | None:
+        with get_db() as db:
+            row = db.execute(
+                "SELECT user_id, phone_masked, role FROM users WHERE phone_hash = ?", (phone_hash,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "id": row["user_id"],
+            "phone_masked": row["phone_masked"],
+            "role": row["role"],
+        }
 
 
 # ===== 图片验证码 =====
@@ -320,10 +439,11 @@ class LoginRateLimiter:
 
 class AuthService:
     @staticmethod
-    def create_token(user_id: str, phone_masked: str) -> str:
+    def create_token(user_id: str, phone_masked: str, role: str = "user") -> str:
         payload = {
             "sub": user_id,
             "phone": phone_masked,
+            "role": role,
             "iat": int(time.time()),
             "exp": int(time.time()) + JWT_EXPIRY_HOURS * 3600,
         }
@@ -364,3 +484,17 @@ async def get_current_user(
     if payload is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
     return payload["sub"]
+
+
+async def get_current_admin(user_id: str = Depends(get_current_user)) -> str:
+    """需要管理员或超级管理员权限"""
+    role = user_store.get_role(user_id)
+    if role not in ("admin", "super_admin"):
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user_id
+
+
+# 全局实例
+user_store = UserStore()
+captcha_store = CaptchaStore()
+rate_limiter = LoginRateLimiter()

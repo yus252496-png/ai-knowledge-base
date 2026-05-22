@@ -3,13 +3,13 @@ import uuid
 import json
 import dashscope
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
 from config import DASHSCOPE_API_KEY, LLM_MODEL, UPLOAD_DIR, USER_DATA_DIR
-from auth import UserStore, CaptchaStore, LoginRateLimiter, AuthService, get_current_user, SECURITY_QUESTIONS, _hash_phone
+from auth import user_store, captcha_store, rate_limiter, AuthService, get_current_user, get_current_admin, SECURITY_QUESTIONS, SUPER_ADMIN_PHONE, _hash_phone
 from database import init_db
 from contextlib import asynccontextmanager
 
@@ -17,6 +17,11 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # 确保超级管理员 17688939632 拥有 super_admin 角色
+    phone_hash = _hash_phone(SUPER_ADMIN_PHONE)
+    user = user_store.get_by_phone_hash(phone_hash)
+    if user:
+        user_store.set_role(user["id"], "super_admin")
     yield
 
 
@@ -40,10 +45,7 @@ def get_engine(user_id: str = None) -> RAGEngine:
         _engines[key] = RAGEngine(user_id)
     return _engines[key]
 
-# 认证服务实例
-user_store = UserStore()
-captcha_store = CaptchaStore()
-rate_limiter = LoginRateLimiter()
+# ===== 认证服务实例已移到 auth.py =====
 
 
 class ChatRequest(BaseModel):
@@ -70,7 +72,7 @@ async def health():
 async def register(phone: str = Form(...), password: str = Form(...), security_question: str = Form(...), security_answer: str = Form(...)):
     user = user_store.register(phone, password, security_question, security_answer)
     token = AuthService.create_token(user["id"], user["phone_masked"])
-    return {"token": token, "user_id": user["id"], "phone_masked": user["phone_masked"]}
+    return {"token": token, "user_id": user["id"], "phone_masked": user["phone_masked"], "role": "user"}
 
 
 @app.get("/api/auth/security-questions")
@@ -141,9 +143,22 @@ async def login(phone: str = Form(...), password: str = Form(...), captcha_id: s
 
     # 4. 成功
     rate_limiter.record_success(phone)
-    user = user_store.get_user(user_id)
-    token = AuthService.create_token(user_id, user["phone_masked"])
-    return {"token": token, "user_id": user_id, "phone_masked": user["phone_masked"]}
+    user = user_store.get_user_detail(user_id)
+    role = user["role"] if user else "user"
+    token = AuthService.create_token(user_id, user["phone_masked"], role)
+    return {"token": token, "user_id": user_id, "phone_masked": user["phone_masked"], "role": role}
+
+
+@app.get("/api/auth/me")
+async def get_me(user_id: str = Depends(get_current_user)):
+    user = user_store.get_user_detail(user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {
+        "user_id": user["id"],
+        "phone_masked": user["phone_masked"],
+        "role": user["role"],
+    }
 
 
 # ===== 文档管理（需要认证） =====
@@ -295,6 +310,93 @@ async def delete_conversation(conv_id: str, user_id: str = Depends(get_current_u
 async def get_active_conversation(user_id: str = Depends(get_current_user)):
     conv = ConversationStore(user_id).get_or_create_active()
     return conv
+
+
+# ===== 管理后台（需要管理员权限） =====
+
+@app.get("/api/admin/users")
+async def admin_list_users(search: str = "", admin_id: str = Depends(get_current_admin)):
+    return user_store.list_users(search.strip())
+
+
+@app.get("/api/admin/users/{target_id}")
+async def admin_get_user(target_id: str, admin_id: str = Depends(get_current_admin)):
+    user = user_store.get_user_detail(target_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="用户不存在")
+
+    # 获取该用户的上传文件
+    user_upload_dir = os.path.join(USER_DATA_DIR, target_id, "uploads")
+    user_chroma_dir = os.path.join(USER_DATA_DIR, target_id, "chroma_db")
+    meta_path = os.path.join(user_chroma_dir, "metadata.json")
+    files = []
+    if os.path.exists(meta_path):
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            files = [
+                {
+                    "doc_id": doc_id,
+                    "file_name": info.get("file_name", doc_id),
+                    "total_pages": info.get("total_pages", 0),
+                    "total_chunks": info.get("total_chunks", 0),
+                }
+                for doc_id, info in meta.get("documents", {}).items()
+            ]
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    # 获取该用户的对话历史
+    conversations = ConversationStore(target_id).list_all()
+
+    return {
+        "user": user,
+        "files": files,
+        "conversations": conversations,
+    }
+
+
+@app.put("/api/admin/users/{target_id}")
+async def admin_update_user(target_id: str, data: dict, admin_id: str = Depends(get_current_admin)):
+    admin_role = user_store.get_role(admin_id)
+    if target_id == admin_id and admin_role == "super_admin":
+        pass  # 超级管理员可以改自己
+    user_store.update_user(target_id, data)
+    return {"status": "updated"}
+
+
+@app.delete("/api/admin/users/{target_id}")
+async def admin_delete_user(target_id: str, admin_id: str = Depends(get_current_admin)):
+    admin_role = user_store.get_role(admin_id)
+    if target_id == admin_id:
+        raise HTTPException(status_code=400, detail="不能删除自己")
+    if admin_role != "super_admin" and target_id == admin_id:
+        raise HTTPException(status_code=400, detail="不能删除自己")
+    success = user_store.delete_user(target_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    return {"status": "deleted"}
+
+
+@app.post("/api/admin/users/{target_id}/role")
+async def admin_set_role(target_id: str, role: str = Form(...), admin_id: str = Depends(get_current_admin)):
+    """只有超级管理员可以修改角色"""
+    admin_role = user_store.get_role(admin_id)
+    if admin_role != "super_admin":
+        raise HTTPException(status_code=403, detail="只有超级管理员可以授权")
+    if role not in ("user", "admin"):
+        raise HTTPException(status_code=422, detail="只能设置为 user 或 admin")
+    user_store.set_role(target_id, role)
+    return {"status": "ok", "role": role}
+
+
+@app.get("/api/admin/files/{target_id}/{doc_id}")
+async def admin_serve_file(target_id: str, doc_id: str, admin_id: str = Depends(get_current_admin)):
+    """提供 PDF 文件预览（浏览器内嵌）"""
+    file_path = os.path.join(USER_DATA_DIR, target_id, "uploads", f"{doc_id}.pdf")
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="文件不存在")
+    return FileResponse(file_path, media_type="application/pdf", filename=f"{doc_id}.pdf")
 
 
 if __name__ == "__main__":

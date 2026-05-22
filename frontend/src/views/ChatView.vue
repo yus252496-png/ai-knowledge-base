@@ -48,7 +48,10 @@
       <!-- 用户信息 -->
       <div class="user-section">
         <span class="user-phone">{{ phone }}</span>
-        <button class="btn-logout" @click="handleLogout">退出</button>
+        <div class="user-actions">
+          <button v-if="isAdmin" class="btn-admin" @click="goAdmin">后台管理</button>
+          <button class="btn-logout" @click="handleLogout">退出</button>
+        </div>
       </div>
     </aside>
 
@@ -104,6 +107,7 @@ import {
   listConversations, createConversation, getConversation, deleteConversation, getActiveConversation,
 } from '../api/index.js'
 import { authState } from '../stores/auth.js'
+import { getCurrentUser } from '../api/index.js'
 
 const router = useRouter()
 
@@ -117,6 +121,11 @@ const uploading = ref(false)
 const messagesRef = ref(null)
 
 const phone = computed(() => authState.phone.value)
+const isAdmin = computed(() => authState.isAdmin.value)
+
+function goAdmin() {
+  router.push('/admin')
+}
 
 // 流式输出状态
 const streamingMsg = ref({ content: '', sources: [], display: '' })
@@ -325,7 +334,15 @@ async function sendMessage() {
   })
 }
 
+async function loadMyRole() {
+  try {
+    const res = await getCurrentUser()
+    if (res.data.role) authState.setRole(res.data.role)
+  } catch {}
+}
+
 onMounted(async () => {
+  await loadMyRole()
   await loadConversations()
   await loadActiveConversation()
   await loadDocuments()
@@ -460,6 +477,23 @@ body {
   font-size: 12px;
 }
 .user-phone { color: #888; }
+.user-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn-admin {
+  padding: 4px 10px;
+  background: #f0f4ff;
+  border: 1px solid #c7d8fe;
+  border-radius: 6px;
+  color: #1e40af;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.btn-admin:hover { background: #dbeafe; border-color: #1e40af; }
 .btn-logout {
   padding: 4px 12px;
   background: none;

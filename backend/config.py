@@ -1,5 +1,7 @@
 import os
 import secrets
+import hashlib
+import base64
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -25,6 +27,10 @@ USER_DATA_DIR = os.path.join(DATA_DIR, "user_data")
 # 认证配置
 JWT_SECRET = os.getenv("JWT_SECRET", secrets.token_hex(32))
 JWT_ALGORITHM = "HS256"
+
+# 字段级加密密钥（用于手机号等敏感字段，可逆加密）
+_field_key = hashlib.sha256(JWT_SECRET.encode()).digest()
+FIELD_ENCRYPT_KEY = base64.urlsafe_b64encode(_field_key)
 JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "24"))
 MAX_LOGIN_ATTEMPTS = int(os.getenv("MAX_LOGIN_ATTEMPTS", "3"))
 LOCKOUT_HOURS = int(os.getenv("LOCKOUT_HOURS", "1"))

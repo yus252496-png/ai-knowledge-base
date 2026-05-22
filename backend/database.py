@@ -85,9 +85,36 @@ def init_db():
     try:
         conn.execute("ALTER TABLE users ADD COLUMN security_question TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
-        pass  # 字段已存在
+        pass
     try:
         conn.execute("ALTER TABLE users ADD COLUMN security_answer_hash TEXT NOT NULL DEFAULT ''")
     except sqlite3.OperationalError:
-        pass  # 字段已存在
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        conn.execute("ALTER TABLE users ADD COLUMN security_answer TEXT NOT NULL DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
+    # 回填已知手机号并加密
+    conn.execute("UPDATE users SET phone = '17688939632' WHERE phone_masked = '176****9632' AND phone = ''")
+    # 加密所有未加密的 phone 字段
+    rows = conn.execute("SELECT user_id, phone FROM users WHERE phone != ''").fetchall()
+    for r in rows:
+        plain = r["phone"]
+        # 如果是以 gAAAA 开头说明已加密，跳过
+        if plain.startswith("gAAAA"):
+            continue
+        try:
+            from auth import encrypt_field
+            encrypted = encrypt_field(plain)
+            conn.execute("UPDATE users SET phone = ? WHERE user_id = ?", (encrypted, r["user_id"]))
+        except Exception:
+            pass
     conn.commit()

@@ -178,3 +178,40 @@ export function deleteConversation(convId) {
 export function getActiveConversation() {
   return api.get('/conversations/active/latest')
 }
+
+// 管理后台
+export function adminListUsers() {
+  return api.get('/admin/users')
+}
+export function adminGetUser(userId) {
+  return api.get(`/admin/users/${userId}`)
+}
+export function adminUpdateUser(userId, data) {
+  return api.put(`/admin/users/${userId}`, data)
+}
+export function adminDeleteUser(userId) {
+  return api.delete(`/admin/users/${userId}`)
+}
+export function adminSetRole(userId, role) {
+  const params = new URLSearchParams()
+  params.append('role', role)
+  return api.post(`/admin/users/${userId}/role`, params)
+}
+export function adminFileUrl(userId, docId) {
+  const base = import.meta.env.VITE_API_URL || ''
+  const token = localStorage.getItem('token')
+  return `${base}/api/admin/files/${userId}/${docId}?token=${token}`
+}
+export function getAdminFileBlobUrl(userId, docId) {
+  const base = import.meta.env.VITE_API_URL || ''
+  const token = localStorage.getItem('token')
+  return fetch(`${base}/api/admin/files/${userId}/${docId}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  }).then(res => {
+    if (!res.ok) throw new Error('Failed to fetch file')
+    return res.blob()
+  }).then(blob => URL.createObjectURL(blob))
+}
+export function getCurrentUser() {
+  return api.get('/auth/me')
+}

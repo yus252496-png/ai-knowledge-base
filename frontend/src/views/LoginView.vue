@@ -114,7 +114,7 @@ async function handleLogin() {
       captchaCode.value = ''
       await loadCaptcha()
     } else if (res.data.token) {
-      authState.login(res.data.token, res.data.user_id, res.data.phone_masked)
+      authState.login(res.data.token, res.data.user_id, res.data.phone_masked, res.data.role)
       router.push('/')
     }
   } catch (e) {

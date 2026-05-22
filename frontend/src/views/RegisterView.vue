@@ -101,7 +101,7 @@ async function handleRegister() {
   try {
     const res = await register(phone.value, password.value, securityQuestion.value, securityAnswer.value.trim())
     if (res.data.token) {
-      authState.login(res.data.token, res.data.user_id, res.data.phone_masked)
+      authState.login(res.data.token, res.data.user_id, res.data.phone_masked, res.data.role)
       router.push('/')
     }
   } catch (e) {
