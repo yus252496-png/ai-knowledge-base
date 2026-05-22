@@ -370,19 +370,13 @@ async def admin_get_user(target_id: str, admin_id: str = Depends(get_current_adm
 
 @app.put("/api/admin/users/{target_id}")
 async def admin_update_user(target_id: str, data: dict, admin_id: str = Depends(get_current_admin)):
-    admin_role = user_store.get_role(admin_id)
-    if target_id == admin_id and admin_role == "super_admin":
-        pass  # 超级管理员可以改自己
     user_store.update_user(target_id, data)
     return {"status": "updated"}
 
 
 @app.delete("/api/admin/users/{target_id}")
 async def admin_delete_user(target_id: str, admin_id: str = Depends(get_current_admin)):
-    admin_role = user_store.get_role(admin_id)
     if target_id == admin_id:
-        raise HTTPException(status_code=400, detail="不能删除自己")
-    if admin_role != "super_admin" and target_id == admin_id:
         raise HTTPException(status_code=400, detail="不能删除自己")
     success = user_store.delete_user(target_id)
     if not success:

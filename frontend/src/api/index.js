@@ -102,7 +102,6 @@ export function chat(question, conversationId = null) {
 // 流式聊天
 export function chatStream(question, conversationId, callbacks) {
   const controller = new AbortController()
-  const mode = 'typewriter'
 
   fetch(`${BASE}/api/chat/stream`, {
     method: 'POST',
@@ -142,8 +141,8 @@ export function chatStream(question, conversationId, callbacks) {
         try {
           const msg = JSON.parse(payload)
 
-          if (mode === 'typewriter' && msg.type === 'token') {
-            fullText = msg.data
+          if (msg.type === 'token') {
+            fullText += msg.data
             callbacks.onMessage?.({ type: 'fulltext', data: fullText })
           } else {
             callbacks.onMessage?.(msg)
