@@ -37,7 +37,13 @@ class RAGEngine:
         os.makedirs(self.chroma_dir, exist_ok=True)
 
         self.meta_path = os.path.join(self.chroma_dir, "metadata.json")
-        self.vector_store = self._load_or_create_store()
+        self._store = None  # 延迟初始化，仅在需要时加载
+
+    def _get_store(self):
+        """延迟初始化向量存储"""
+        if self._store is None:
+            self._store = self._load_or_create_store()
+        return self._store
 
     def _load_or_create_store(self):
         index_path = os.path.join(self.chroma_dir, "index.faiss")
@@ -50,13 +56,16 @@ class RAGEngine:
             except Exception as e:
                 print(f"FAISS 加载失败，将重建索引：{e}")
         dummy = Document(page_content="init", metadata={"source": "_init_"})
-        store = FAISS.from_documents([dummy], self.embeddings)
-        store.save_local(self.chroma_dir)
-        return store
+        try:
+            store = FAISS.from_documents([dummy], self.embeddings)
+            store.save_local(self.chroma_dir)
+            return store
+        except Exception as e:
+            raise RuntimeError(f"向量引擎初始化失败，请检查 DashScope API 密钥和账户余额：{e}")
 
     def _persist(self):
         try:
-            self.vector_store.save_local(self.chroma_dir)
+            self._get_store().save_local(self.chroma_dir)
         except Exception as e:
             print(f"FAISS 持久化失败：{e}")
 
@@ -100,9 +109,10 @@ class RAGEngine:
             chunk.metadata["chunk_id"] = f"{doc_id}_{i}"
             chunk.metadata["source"] = display_name
 
+        store = self._get_store()
         batch_size = 10
         for i in range(0, len(chunks), batch_size):
-            self.vector_store.add_documents(chunks[i:i + batch_size])
+            store.add_documents(chunks[i:i + batch_size])
         self._persist()
 
         meta = self._load_metadata()
@@ -147,7 +157,8 @@ class RAGEngine:
 
     def retrieve(self, question: str, k: int = 5) -> dict:
         try:
-            docs_with_scores = self.vector_store.similarity_search_with_score(question, k=k)
+            store = self._get_store()
+            docs_with_scores = store.similarity_search_with_score(question, k=k)
         except Exception:
             return {"error": "知识库为空，请先上传文档。", "sources": [], "context": ""}
 
@@ -238,7 +249,12 @@ class RAGEngine:
     def _rebuild_index(self):
         meta = self._load_metadata()
         dummy = Document(page_content="init", metadata={"source": "_init_"})
-        self.vector_store = FAISS.from_documents([dummy], self.embeddings)
+        try:
+            self._store = FAISS.from_documents([dummy], self.embeddings)
+        except Exception as e:
+            raise RuntimeError(f"向量引擎重建失败：{e}")
+
+        store = self._store
 
         batch_size = 10
         for doc_id, info in meta.get("documents", {}).items():
@@ -254,4 +270,4 @@ class RAGEngine:
                         chunk.metadata["chunk_id"] = f"{doc_id}_{i}"
                         chunk.metadata["source"] = file_name
                     for i in range(0, len(chunks), batch_size):
-                        self.vector_store.add_documents(chunks[i:i + batch_size])
+                        store.add_documents(chunks[i:i + batch_size])
