@@ -82,14 +82,33 @@ export function resetPassword(resetToken, newPassword) {
 export function uploadDocument(file, onProgress) {
   const form = new FormData()
   form.append('file', file)
-  return api.post('/upload', form, {
-    onUploadProgress(progressEvent) {
-      if (onProgress && progressEvent.total) {
-        const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100)
-        onProgress(pct)
-      }
+
+  let simTimer = null
+
+  function startSimulatedProgress() {
+    let pct = 80
+    simTimer = setInterval(() => {
+      pct += 1 + Math.random() * 2
+      if (pct >= 95) { pct = 95; clearInterval(simTimer); simTimer = null }
+      if (onProgress) onProgress(Math.round(pct))
+    }, 400)
+  }
+
+  const promise = api.post('/upload', form, {
+    onUploadProgress(e) {
+      if (!onProgress || !e.total) return
+      // 真实上传进度映射到 0-80%
+      const pct = Math.round((e.loaded / e.total) * 100)
+      onProgress(Math.min(Math.round(pct * 0.8), 80))
+      // 上传完毕 → 进入后端处理阶段模拟进度
+      if (e.loaded >= e.total && !simTimer) startSimulatedProgress()
     },
   })
+
+  promise.then(() => { if (simTimer) clearInterval(simTimer); if (onProgress) onProgress(100) })
+  promise.catch(() => { if (simTimer) clearInterval(simTimer); if (onProgress) onProgress(0) })
+
+  return promise
 }
 export function listDocuments() {
   return api.get('/documents')
