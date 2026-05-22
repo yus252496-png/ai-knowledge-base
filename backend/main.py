@@ -402,3 +402,14 @@ async def admin_serve_file(target_id: str, doc_id: str, admin_id: str = Depends(
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# ===== 解锁账号（临时调试用） =====
+
+@app.post("/api/debug/unlock")
+async def debug_unlock(phone: str = Form(...)):
+    from database import get_db
+    from auth import _hash_phone
+    with get_db() as db:
+        db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (_hash_phone(phone),))
+    return {"status": "ok", "phone": phone}
