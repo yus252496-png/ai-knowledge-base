@@ -5,19 +5,17 @@ from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_dashscope import DashScopeEmbeddings
-import dashscope
-from config import DASHSCOPE_API_KEY, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
-
-
-dashscope.api_key = DASHSCOPE_API_KEY
+from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 
 
 class RAGEngine:
     def __init__(self, user_id: str = None):
-        self.embeddings = DashScopeEmbeddings(
+        self.embeddings = OpenAIEmbeddings(
             model=EMBEDDING_MODEL,
-            dashscope_api_key=DASHSCOPE_API_KEY,
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
         )
         self.text_splitter = RecursiveCharacterTextSplitter(
             chunk_size=CHUNK_SIZE,
@@ -37,10 +35,9 @@ class RAGEngine:
         os.makedirs(self.chroma_dir, exist_ok=True)
 
         self.meta_path = os.path.join(self.chroma_dir, "metadata.json")
-        self._store = None  # 延迟初始化，仅在需要时加载
+        self._store = None  # 延迟初始化
 
     def _get_store(self):
-        """延迟初始化向量存储"""
         if self._store is None:
             self._store = self._load_or_create_store()
         return self._store
@@ -61,7 +58,7 @@ class RAGEngine:
             store.save_local(self.chroma_dir)
             return store
         except Exception as e:
-            raise RuntimeError(f"向量引擎初始化失败，请检查 DashScope API 密钥和账户余额：{e}")
+            raise RuntimeError(f"向量引擎初始化失败，请检查 API 密钥和账户余额：{e}")
 
     def _persist(self):
         try:
@@ -94,6 +91,15 @@ class RAGEngine:
                     metadata={"page": i, "source": os.path.basename(file_path)},
                 ))
         return documents
+
+    def _build_llm(self, **kwargs):
+        return ChatOpenAI(
+            model=LLM_MODEL,
+            api_key=LLM_API_KEY,
+            base_url=LLM_BASE_URL,
+            temperature=0.3,
+            **kwargs,
+        )
 
     def process_pdf(self, file_path: str, doc_id: str, original_name: str = None) -> dict:
         pages = self._extract_pdf_text(file_path)
@@ -139,21 +145,16 @@ class RAGEngine:
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文回答问题。如果上下文中没有足够信息，明确告诉用户找不到相关信息。用中文回答。不要添加上下文之外的信息。"
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"上下文信息：\n{result['context']}\n\n问题：{question}"},
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
         ]
 
-        response = dashscope.Generation.call(
-            model=LLM_MODEL,
-            messages=messages,
-            temperature=0.3,
-            result_format="message",
-        )
-
-        if response.status_code != 200:
-            return {"answer": f"大模型调用失败：{response.message}", "sources": result["sources"]}
-
-        return {"answer": response.output.choices[0].message.content, "sources": result["sources"]}
+        llm = self._build_llm()
+        try:
+            response = llm.invoke(messages)
+            return {"answer": response.content, "sources": result["sources"]}
+        except Exception as e:
+            return {"answer": f"大模型调用失败：{e}", "sources": result["sources"]}
 
     def retrieve(self, question: str, k: int = 5) -> dict:
         try:
@@ -199,23 +200,17 @@ class RAGEngine:
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文回答问题。如果上下文中没有足够信息，明确告诉用户找不到相关信息。用中文回答。不要添加上下文之外的信息。"
         messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"上下文信息：\n{result['context']}\n\n问题：{question}"},
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
         ]
 
-        responses = dashscope.Generation.call(
-            model=LLM_MODEL,
-            messages=messages,
-            stream=True,
-            temperature=0.3,
-            result_format="message",
-        )
-
-        for chunk in responses:
-            if chunk.status_code == 200:
-                token = chunk.output.choices[0].message.content
-                if token:
-                    yield ("token", token)
+        llm = self._build_llm()
+        try:
+            for chunk in llm.stream(messages):
+                if chunk.content:
+                    yield ("token", chunk.content)
+        except Exception as e:
+            yield ("error", f"大模型调用失败：{e}")
 
     def list_documents(self) -> List[dict]:
         meta = self._load_metadata()

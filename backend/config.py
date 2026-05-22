@@ -6,9 +6,10 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY")
-LLM_MODEL = os.getenv("LLM_MODEL", "qwen-plus")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v3")
+LLM_API_KEY = os.getenv("LLM_API_KEY", "")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.deepseek.com/v1")
+LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-v2")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "100"))
 

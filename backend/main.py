@@ -1,14 +1,13 @@
 import os
 import uuid
 import json
-import dashscope
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
-from config import DASHSCOPE_API_KEY, LLM_MODEL, UPLOAD_DIR, USER_DATA_DIR
+from config import UPLOAD_DIR, USER_DATA_DIR
 from auth import user_store, captcha_store, rate_limiter, AuthService, get_current_user, get_current_admin, SECURITY_QUESTIONS, SUPER_ADMIN_PHONE, _hash_phone
 from database import init_db, USE_PG
 from contextlib import asynccontextmanager
