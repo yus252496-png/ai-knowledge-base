@@ -166,15 +166,30 @@ class UserStore:
         }
 
     def verify_security_answer(self, phone: str, answer: str) -> bool:
-        """验证密保答案"""
+        """验证密保答案（兼容旧数据：hash 验证失败时尝试明文匹配）"""
         phone_hash = _hash_phone(phone)
         answer_hash = _hash_phone(answer.strip().lower())
         with get_db() as db:
             row = db.execute(
-                "SELECT 1 FROM users WHERE phone_hash = ? AND security_answer_hash = ?",
-                (phone_hash, answer_hash),
+                "SELECT security_answer_hash, security_answer FROM users WHERE phone_hash = ?",
+                (phone_hash,),
             ).fetchone()
-        return row is not None
+        if row is None:
+            return False
+        # 优先 hash 比对
+        if row["security_answer_hash"] and row["security_answer_hash"] == answer_hash:
+            return True
+        # 兼容旧数据：security_answer_hash 为空时回退到明文比对
+        if not row["security_answer_hash"] and row["security_answer"]:
+            if row["security_answer"].strip().lower() == answer.strip().lower():
+                # 回填 hash
+                with get_db() as db:
+                    db.execute(
+                        "UPDATE users SET security_answer_hash = ? WHERE phone_hash = ?",
+                        (answer_hash, phone_hash),
+                    )
+                return True
+        return False
 
     def update_password(self, phone: str, new_password: str):
         """更新密码"""
@@ -268,6 +283,8 @@ class UserStore:
             if "security_answer" in data:
                 fields.append("security_answer = ?")
                 values.append(data["security_answer"])
+                fields.append("security_answer_hash = ?")
+                values.append(_hash_phone(data["security_answer"].strip().lower()))
         if "password" in data and data["password"]:
             fields.append("password_hash = ?")
             values.append(_hash_password(data["password"]))

@@ -22,6 +22,20 @@ async def lifespan(app: FastAPI):
     user = user_store.get_by_phone_hash(phone_hash)
     if user:
         user_store.set_role(user["id"], "super_admin")
+    # 回填已有用户的 security_answer_hash（兼容旧数据）
+    from database import get_db
+    try:
+        with get_db() as db:
+            rows = db.execute(
+                "SELECT phone_hash, security_answer FROM users WHERE security_answer_hash = '' AND security_answer != ''"
+            ).fetchall()
+            for r in rows:
+                h = _hash_phone(r["security_answer"].strip().lower())
+                db.execute("UPDATE users SET security_answer_hash = ? WHERE phone_hash = ?", (h, r["phone_hash"]))
+            if rows:
+                print(f"已回填 {len(rows)} 个用户的密保答案 hash")
+    except Exception as e:
+        print(f"密保答案回填失败（非关键错误）：{e}")
     yield
 
 
