@@ -6,11 +6,12 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.embeddings import Embeddings
 from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 
 
-class _LocalEmbeddings:
+class _LocalEmbeddings(Embeddings):
     """直接包装 fastembed.TextEmbedding，绕过 langchain 的 FastEmbedEmbeddings 封装。"""
     def __init__(self, model_name: str = None):
         from fastembed import TextEmbedding
