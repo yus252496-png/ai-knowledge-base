@@ -292,6 +292,20 @@ class RAGEngine:
         relevant_docs = [(doc, score) for doc, score in docs_with_scores
                          if doc.metadata.get("source") != "_init_"]
 
+        if not relevant_docs and self.user_id:
+            # 可能是容器重启后 FAISS 索引未重建，尝试从 PG 恢复
+            if self._try_restore_from_pg():
+                self._rebuild_index()
+                self._persist()
+                self._store = None  # 下次重新加载
+                try:
+                    store = self._get_store()
+                    docs_with_scores = store.similarity_search_with_score(question, k=k)
+                    relevant_docs = [(doc, score) for doc, score in docs_with_scores
+                                     if doc.metadata.get("source") != "_init_"]
+                except Exception:
+                    pass
+
         if not relevant_docs:
             return {
                 "answer": "未在已上传的文档中找到相关信息，请尝试换个问题或上传相关文档。",

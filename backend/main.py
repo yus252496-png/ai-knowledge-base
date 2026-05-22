@@ -239,12 +239,14 @@ async def upload_file(file: UploadFile = File(...), user_id: str = Depends(get_c
             try:
                 bg_engine = RAGEngine(user_id)
                 bg_engine.process_pdf(file_path, doc_id, original_name=original_name, pdf_bytes=content)
-                # 通知缓存的引擎下次重新加载
+                # 直接将新 store 换入缓存引擎，无需等磁盘重载
                 cached = _engines.get(user_id)
-                if cached:
-                    cached._store = None
+                if cached and bg_engine._store:
+                    cached._store = bg_engine._store
             except Exception as e:
+                import traceback
                 print(f"后台索引失败 {doc_id}: {e}")
+                traceback.print_exc()
 
     t = threading.Thread(target=_bg_process, daemon=True)
     t.start()
@@ -554,3 +556,23 @@ async def debug_unlock(phone: str = Form(...)):
     with get_db() as db:
         db.execute("DELETE FROM login_attempts WHERE phone_hash = ?", (_hash_phone(phone),))
     return {"status": "ok", "phone": phone}
+
+
+# ===== FAISS 诊断 =====
+
+@app.get("/api/debug/faiss")
+async def debug_faiss(user_id: str = Depends(get_current_user)):
+    """检查当前用户的 FAISS 索引状态"""
+    engine = get_engine(user_id)
+    store = engine._get_store()
+    index_path = os.path.join(engine.chroma_dir, "index.faiss")
+    meta = engine._load_metadata()
+    doc_count = len(meta.get("documents", {}))
+    return {
+        "index_exists": os.path.exists(index_path),
+        "chroma_dir": engine.chroma_dir,
+        "upload_dir": engine.upload_dir,
+        "documents_in_metadata": doc_count,
+        "documents_in_pg": doc_count,
+        "pdf_files_on_disk": len([f for f in os.listdir(engine.upload_dir) if f.endswith(".pdf")]) if os.path.exists(engine.upload_dir) else 0,
+    }
