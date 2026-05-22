@@ -6,9 +6,21 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
+
+
+class _LocalEmbeddings:
+    """直接包装 fastembed.TextEmbedding，绕过 langchain 的 FastEmbedEmbeddings 封装。"""
+    def __init__(self, model_name: str = None):
+        from fastembed import TextEmbedding
+        self._model = TextEmbedding(model_name=model_name or "BAAI/bge-small-en-v1.5")
+
+    def embed_query(self, text: str):
+        return list(self._model.embed(text))[0]
+
+    def embed_documents(self, texts: List[str]):
+        return list(self._model.embed(texts))
 
 
 class RAGEngine:
@@ -36,7 +48,7 @@ class RAGEngine:
 
     def _get_embeddings(self):
         if self._embeddings is None:
-            self._embeddings = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
+            self._embeddings = _LocalEmbeddings(model_name=EMBEDDING_MODEL)
         return self._embeddings
 
     def _get_store(self):
