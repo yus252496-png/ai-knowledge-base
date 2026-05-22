@@ -36,10 +36,6 @@ class RAGEngine:
 
     def _get_embeddings(self):
         if self._embeddings is None:
-            if not LLM_API_KEY:
-                raise RuntimeError(
-                    "LLM_API_KEY 未配置，请在环境变量中设置。"
-                )
             self._embeddings = FastEmbedEmbeddings(model_name=EMBEDDING_MODEL)
         return self._embeddings
 
@@ -64,7 +60,7 @@ class RAGEngine:
             store.save_local(self.chroma_dir)
             return store
         except Exception as e:
-            raise RuntimeError(f"向量引擎初始化失败，请检查 API 密钥和账户余额：{e}")
+            raise RuntimeError(f"向量引擎初始化失败，请检查嵌入模型配置：{e}")
 
     def _persist(self):
         try:
