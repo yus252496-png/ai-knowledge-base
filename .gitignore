@@ -1,5 +1,6 @@
 backend/.env
 backend/chroma_db/
+.claude/
 backend/uploads/
 backend/__pycache__/
 backend/test_runner.py
