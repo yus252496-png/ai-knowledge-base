@@ -323,6 +323,9 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
     conv_store.add_message(conv_id, "user", req.question)
 
     async def generate():
+        # 先发送 connected 事件，让浏览器确认连接已建立
+        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+
         full_text = ""
         sources = []
 
@@ -342,7 +345,15 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
 
         yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "X-Accel-Buffering": "no",
+            "Cache-Control": "no-cache, no-store, must-revalidate",
+            "Connection": "keep-alive",
+        },
+    )
 
 
 # ===== 会话管理（需要认证） =====
