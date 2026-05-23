@@ -470,6 +470,20 @@ class RAGEngine:
             print(f"PG 文档加载失败：{e}")
             return {}
 
+    def _remove_index_files(self):
+        """删除 FAISS 索引文件，触发下次查询时自动重建"""
+        import glob as _glob
+        for f in _glob.glob(os.path.join(self.chroma_dir, "index.faiss*")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        for f in _glob.glob(os.path.join(self.chroma_dir, "index.pkl")):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+
     def delete_document(self, doc_id: str) -> bool:
         meta = self._load_metadata()
         if doc_id not in meta.get("documents", {}):
@@ -481,8 +495,9 @@ class RAGEngine:
         file_path = os.path.join(self.upload_dir, f"{doc_id}.pdf")
         if os.path.exists(file_path):
             os.remove(file_path)
-        self._rebuild_index()
-        self._persist()
+        # 清空 store 缓存并删除索引文件，下次查询时自动重建
+        self._store = None
+        self._remove_index_files()
         return True
 
     def clear_documents(self):
@@ -490,8 +505,9 @@ class RAGEngine:
         meta["documents"] = {}
         self._save_metadata(meta)
         self._pg_clear_documents()
-        self._rebuild_index()
-        self._persist()
+        # 清空 store 缓存并删除索引文件，下次查询时自动重建
+        self._store = None
+        self._remove_index_files()
 
     def _rebuild_index(self):
         meta = self._load_metadata()
