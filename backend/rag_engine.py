@@ -1,5 +1,6 @@
 import os
 import json
+import asyncio
 from typing import List
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -382,7 +383,9 @@ class RAGEngine:
             yield ("error", f"大模型调用失败：{e}")
 
     async def astream_query(self, question: str, k: int = 5, doc_ids: list = None):
-        result = self.retrieve(question, k, doc_ids=doc_ids)
+        # retrieve() 是同步操作，在线程池中运行避免阻塞事件循环
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, self.retrieve, question, k, doc_ids)
         if result.get("error"):
             yield ("error", result["error"])
             return

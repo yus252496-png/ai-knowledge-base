@@ -37,6 +37,17 @@ async def lifespan(app: FastAPI):
                 print(f"已回填 {len(rows)} 个用户的密保答案 hash")
     except Exception as e:
         print(f"密保答案回填失败（非关键错误）：{e}")
+
+    # 预热嵌入模型，避免首次请求触发同步下载阻塞事件循环
+    try:
+        from rag_engine import _LocalEmbeddings
+        print("正在预热嵌入模型...")
+        emb = _LocalEmbeddings()
+        emb.embed_query("warmup")
+        print("嵌入模型预热完成")
+    except Exception as e:
+        print(f"嵌入模型预热失败（非关键错误）：{e}")
+
     yield
 
 
@@ -323,26 +334,37 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
     conv_store.add_message(conv_id, "user", req.question)
 
     async def generate():
+        import time as _time
+        _t0 = _time.time()
+        print(f"[stream] connected event at t={_t0:.1f}")
         # 先发送 connected 事件，让浏览器确认连接已建立
         yield f"data: {json.dumps({'type': 'connected'})}\n\n"
 
         full_text = ""
         sources = []
 
-        async for msg_type, data in get_engine(user_id).astream_query(req.question, doc_ids=req.doc_ids):
-            if msg_type == "sources":
-                sources = data
-                yield f"data: {json.dumps({'type': 'sources', 'data': data})}\n\n"
-            elif msg_type == "token":
-                full_text += data
-                yield f"data: {json.dumps({'type': 'token', 'data': data})}\n\n"
-            elif msg_type == "error":
-                yield f"data: {json.dumps({'type': 'error', 'data': data})}\n\n"
-                return
+        try:
+            engine = get_engine(user_id)
+            print(f"[stream] got engine at t={_time.time()-_t0:.1f}s")
+            async for msg_type, data in engine.astream_query(req.question, doc_ids=req.doc_ids):
+                if msg_type == "sources":
+                    sources = data
+                    yield f"data: {json.dumps({'type': 'sources', 'data': data})}\n\n"
+                elif msg_type == "token":
+                    full_text += data
+                    yield f"data: {json.dumps({'type': 'token', 'data': data})}\n\n"
+                elif msg_type == "error":
+                    yield f"data: {json.dumps({'type': 'error', 'data': data})}\n\n"
+                    return
+            print(f"[stream] LLM done at t={_time.time()-_t0:.1f}s")
+        except Exception as e:
+            print(f"[stream] ERROR: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'data': f'服务器内部错误：{e}'})}\n\n"
+            return
 
         if full_text:
             conv_store.add_message(conv_id, "assistant", full_text, sources)
-
+        print(f"[stream] done at t={_time.time()-_t0:.1f}s")
         yield f"data: {json.dumps({'type': 'done', 'conversation_id': conv_id})}\n\n"
 
     return StreamingResponse(
