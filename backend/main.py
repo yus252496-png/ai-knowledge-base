@@ -157,13 +157,13 @@ async def reset_password(reset_token: str = Form(...), new_password: str = Form(
 
 
 @app.get("/api/auth/captcha")
-async def get_captcha():
+def get_captcha():
     captcha_id, image_b64 = captcha_store.create()
     return {"captcha_id": captcha_id, "image": f"data:image/png;base64,{image_b64}"}
 
 
 @app.post("/api/auth/login")
-async def login(phone: str = Form(...), password: str = Form(...), captcha_id: str = Form(...), captcha_code: str = Form(...)):
+def login(phone: str = Form(...), password: str = Form(...), captcha_id: str = Form(...), captcha_code: str = Form(...)):
     # 1. 检查是否锁定
     if rate_limiter.check_locked(phone):
         return {"error": "locked", "detail": "账号已锁定，请 1 小时后再试"}
