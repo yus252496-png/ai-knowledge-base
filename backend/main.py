@@ -48,6 +48,17 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"嵌入模型预热失败（非关键错误）：{e}")
 
+    # 检测 LLM API 可达性
+    try:
+        from httpx import Client
+        from config import LLM_BASE_URL, LLM_API_KEY
+        c = Client(timeout=5)
+        r = c.get(f"{LLM_BASE_URL}/models", headers={"Authorization": f"Bearer {LLM_API_KEY}"})
+        print(f"LLM API 连通性检测: {r.status_code}")
+        c.close()
+    except Exception as e:
+        print(f"LLM API 连通性检测失败（非关键错误）：{e}")
+
     yield
 
 

@@ -415,7 +415,7 @@ class RAGEngine:
             stream = llm.astream(messages)
             while True:
                 try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=20)
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=10)
                     if chunk.content:
                         yield ("token", chunk.content)
                 except StopAsyncIteration:
