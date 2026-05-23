@@ -216,7 +216,7 @@ class RAGEngine:
             openai_api_key=LLM_API_KEY,
             openai_api_base=LLM_BASE_URL,
             temperature=0.3,
-            timeout=30,
+            timeout=15,
             max_retries=0,
             **kwargs,
         )
@@ -383,17 +383,25 @@ class RAGEngine:
             yield ("error", f"大模型调用失败：{e}")
 
     async def astream_query(self, question: str, k: int = 5, doc_ids: list = None):
+        import time as _time
+        _t0 = _time.time()
+        print(f"[astream] retrieve start at t={_time.time()-_t0:.1f}s")
         # retrieve() 是同步操作，在线程池中运行避免阻塞事件循环
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(None, self.retrieve, question, k, doc_ids)
+        print(f"[astream] retrieve done at t={_time.time()-_t0:.1f}s")
         if result.get("error"):
+            print(f"[astream] retrieve error: {result['error']}")
             yield ("error", result["error"])
             return
         if not result.get("context"):
+            print(f"[astream] no context found")
             yield ("error", "未在已上传的文档中找到相关信息")
             return
 
+        print(f"[astream] yielding sources at t={_time.time()-_t0:.1f}s")
         yield ("sources", result["sources"])
+        print(f"[astream] sources yielded, starting LLM at t={_time.time()-_t0:.1f}s")
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
@@ -403,10 +411,20 @@ class RAGEngine:
 
         llm = self._build_llm()
         try:
-            async for chunk in llm.astream(messages):
-                if chunk.content:
-                    yield ("token", chunk.content)
+            print(f"[astream] LLM astream start at t={_time.time()-_t0:.1f}s")
+            stream = llm.astream(messages)
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=20)
+                    if chunk.content:
+                        yield ("token", chunk.content)
+                except StopAsyncIteration:
+                    break
+        except asyncio.TimeoutError:
+            print(f"[astream] LLM timeout at t={_time.time()-_t0:.1f}s")
+            yield ("error", "大模型响应超时，请稍后重试")
         except Exception as e:
+            print(f"[astream] LLM error at t={_time.time()-_t0:.1f}s: {e}")
             yield ("error", f"大模型调用失败：{e}")
 
     def list_documents(self) -> List[dict]:

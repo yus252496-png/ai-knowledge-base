@@ -273,7 +273,7 @@ async def list_documents(user_id: str = Depends(get_current_user)):
 
 
 @app.delete("/api/documents/{doc_id}")
-async def delete_document(doc_id: str, user_id: str = Depends(get_current_user)):
+def delete_document(doc_id: str, user_id: str = Depends(get_current_user)):
     success = get_engine(user_id).delete_document(doc_id)
     if not success:
         raise HTTPException(status_code=404, detail="文档未找到")
@@ -281,7 +281,7 @@ async def delete_document(doc_id: str, user_id: str = Depends(get_current_user))
 
 
 @app.delete("/api/documents")
-async def clear_documents(user_id: str = Depends(get_current_user)):
+def clear_documents(user_id: str = Depends(get_current_user)):
     get_engine(user_id).clear_documents()
     return {"status": "cleared"}
 
@@ -369,7 +369,7 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
 
     return StreamingResponse(
         generate(),
-        media_type="text/event-stream",
+        media_type="text/plain",
         headers={
             "X-Accel-Buffering": "no",
             "Cache-Control": "no-cache, no-store, must-revalidate",
