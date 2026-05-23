@@ -516,12 +516,19 @@ body {
 .conv-item:hover, .doc-item:hover { background: #f5f5f5; }
 .conv-item.active { background: #f0f0f0; }
 
-.conv-title, .doc-name {
+.conv-title {
   flex: 1;
   font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: #1f1f1f;
+}
+.doc-name {
+  flex: 1;
+  font-size: 12px;
+  word-break: break-all;
+  line-height: 1.4;
   color: #1f1f1f;
 }
 .doc-info {
