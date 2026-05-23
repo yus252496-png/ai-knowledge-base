@@ -121,13 +121,22 @@ export function clearDocuments() {
 }
 
 // 非流式聊天（fallback）
-export function chat(question, conversationId = null) {
-  return api.post('/chat', { question, conversation_id: conversationId })
+export function chat(question, conversationId = null, docIds = null) {
+  const body = { question, conversation_id: conversationId }
+  if (docIds && docIds.length > 0) {
+    body.doc_ids = docIds
+  }
+  return api.post('/chat', body)
 }
 
 // 流式聊天
-export function chatStream(question, conversationId, callbacks) {
+export function chatStream(question, conversationId, docIds, callbacks) {
   const controller = new AbortController()
+
+  const body = { question, conversation_id: conversationId }
+  if (docIds && docIds.length > 0) {
+    body.doc_ids = docIds
+  }
 
   fetch(`${BASE}/api/chat/stream`, {
     method: 'POST',
@@ -135,7 +144,7 @@ export function chatStream(question, conversationId, callbacks) {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${localStorage.getItem('token')}`,
     },
-    body: JSON.stringify({ question, conversation_id: conversationId }),
+    body: JSON.stringify(body),
     signal: controller.signal,
   }).then(async (response) => {
     if (response.status === 401) {

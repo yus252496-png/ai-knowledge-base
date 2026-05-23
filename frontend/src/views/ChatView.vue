@@ -38,6 +38,13 @@
         <div class="doc-list">
           <div v-if="documents.length === 0" class="empty-hint">暂无文档</div>
           <div v-for="doc in documents" :key="doc.doc_id" class="doc-item">
+            <input
+              type="checkbox"
+              :value="doc.doc_id"
+              v-model="selectedDocIds"
+              class="doc-checkbox"
+              :id="'doc-' + doc.doc_id"
+            />
             <div class="doc-info">
               <span class="doc-name">{{ doc.file_name }}</span>
               <span class="doc-meta">{{ doc.total_chunks }} 段</span>
@@ -63,7 +70,15 @@
           <button class="btn-menu" @click="showSidebar = !showSidebar" title="菜单">☰</button>
           <h1>{{ currentTitle }}</h1>
         </div>
-        <span class="doc-count">{{ documents.length }} 个文档</span>
+        <span class="doc-count">
+          <template v-if="selectedDocIds.length === 0">{{ documents.length }} 个文档</template>
+          <template v-else>已选 {{ selectedDocIds.length }}/{{ documents.length }}</template>
+        </span>
+      </div>
+      <div v-if="selectedDocIds.length > 0" class="selection-bar">
+        <span class="selection-label">搜索范围：</span>
+        <span class="selection-docs">{{ selectedDocNames.join(', ') }}</span>
+        <button class="selection-clear" @click="clearSelection">取消选择</button>
       </div>
       <div class="messages" ref="messagesRef">
         <div v-if="messages.length === 0" class="welcome">
@@ -80,7 +95,14 @@
           </div>
         </div>
         <div v-if="(loading || streamingMsg.content) && streamingMsg.content !== undefined" class="message assistant">
-          <div class="msg-content">{{ streamingMsg.display }}<span v-if="streamingMsg.display.length < streamingMsg.content.length" class="cursor">|</span></div>
+          <div class="msg-content">
+            <template v-if="streamingMsg.content">
+              {{ streamingMsg.display }}<span v-if="streamingMsg.display.length < streamingMsg.content.length" class="cursor">|</span>
+            </template>
+            <template v-else>
+              <span class="thinking">思考中<span class="dots">...</span></span>
+            </template>
+          </div>
           <div v-if="streamingMsg.sources && streamingMsg.sources.length" class="sources">
             <div class="source-title">来源</div>
             <div v-for="(src, si) in streamingMsg.sources" :key="si" class="source-item">
@@ -97,14 +119,15 @@
           @keydown.enter="sendMessage"
           :disabled="loading"
         />
-        <button @click="sendMessage" :disabled="!question.trim() || loading">发送</button>
+        <button v-if="loading" class="btn-stop" @click="stopStreaming">停止</button>
+        <button v-else @click="sendMessage" :disabled="!question.trim() || loading">发送</button>
       </div>
     </main>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, nextTick, computed } from 'vue'
+import { ref, onMounted, nextTick, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   uploadDocument, chat, chatStream, listDocuments, deleteDocument, clearDocuments,
@@ -125,6 +148,18 @@ const uploading = ref(false)
 const uploadProgress = ref(0)
 const messagesRef = ref(null)
 const showSidebar = ref(false)
+const currentAbortController = ref(null)
+const lastQuestion = ref('')
+
+const selectedDocIds = ref([])
+const selectedDocNames = computed(() => {
+  return documents.value
+    .filter(d => selectedDocIds.value.includes(d.doc_id))
+    .map(d => d.file_name)
+})
+function clearSelection() {
+  selectedDocIds.value = []
+}
 
 const phone = computed(() => authState.phone.value)
 const isAdmin = computed(() => authState.isAdmin.value)
@@ -240,6 +275,12 @@ async function loadDocuments() {
   }
 }
 
+// 文档列表刷新时，清除已失效的选择
+watch(documents, () => {
+  const validIds = new Set(documents.value.map(d => d.doc_id))
+  selectedDocIds.value = selectedDocIds.value.filter(id => validIds.has(id))
+})
+
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
 
 async function handleUpload(e) {
@@ -313,6 +354,7 @@ async function sendMessage() {
   if (!q || loading.value) return
 
   messages.value.push({ role: 'user', content: q })
+  lastQuestion.value = q
   question.value = ''
   loading.value = true
 
@@ -326,7 +368,7 @@ async function sendMessage() {
   let fullContent = ''
   let msgSources = []
 
-  chatStream(q, currentConvId.value, {
+  currentAbortController.value = chatStream(q, currentConvId.value, selectedDocIds.value, {
     onMessage(msg) {
       if (msg.type === 'fulltext') {
         fullContent = msg.data
@@ -363,6 +405,21 @@ async function sendMessage() {
       scrollToBottom()
     },
   })
+}
+
+function stopStreaming() {
+  if (currentAbortController.value) {
+    currentAbortController.value.abort()
+    currentAbortController.value = null
+  }
+  if (typewriterTimer) {
+    clearInterval(typewriterTimer)
+    typewriterTimer = null
+  }
+  streamingMsg.value = { content: '', sources: [], display: '' }
+  loading.value = false
+  question.value = lastQuestion.value
+  scrollToBottom()
 }
 
 async function loadMyRole() {
@@ -658,10 +715,22 @@ body {
 }
 .input-area button:hover { opacity: 0.85; }
 .input-area button:disabled { opacity: 0.3; cursor: not-allowed; }
+.btn-stop { background: #ef4444 !important; color: #fff !important; min-width: 52px; }
+.btn-stop:hover { opacity: 0.85 !important; }
 .cursor { animation: blink 0.6s infinite; }
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0; }
+}
+
+.thinking { color: #888; font-size: 13px; }
+.thinking .dots { animation: dotPulse 1.4s steps(4, end) infinite; }
+@keyframes dotPulse {
+  0%   { opacity: 0.3; }
+  25%  { opacity: 0.6; }
+  50%  { opacity: 1; }
+  75%  { opacity: 0.6; }
+  100% { opacity: 0.3; }
 }
 
 /* ===== 移动端适配 ===== */
@@ -725,5 +794,50 @@ body {
   .input-area button {
     padding: 9px 14px;
   }
+}
+
+/* 文档选择器 */
+.doc-checkbox {
+  margin-right: 4px;
+  flex-shrink: 0;
+  accent-color: #1f1f1f;
+  cursor: pointer;
+}
+
+.selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 28px;
+  background: #f0f4ff;
+  border-bottom: 1px solid #c7d8fe;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.selection-label {
+  color: #888;
+  flex-shrink: 0;
+}
+.selection-docs {
+  color: #1e40af;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.selection-clear {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  background: none;
+  border: 1px solid #c7d8fe;
+  border-radius: 4px;
+  color: #1e40af;
+  font-size: 11px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.selection-clear:hover {
+  background: #dbeafe;
+  border-color: #1e40af;
 }
 </style>

@@ -2,6 +2,7 @@ import os
 import uuid
 import json
 import threading
+from typing import Optional, List
 from fastapi import FastAPI, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -88,6 +89,7 @@ def _get_engine_lock(user_id: str) -> threading.Lock:
 class ChatRequest(BaseModel):
     question: str
     conversation_id: str = None
+    doc_ids: Optional[List[str]] = None
 
 
 class ChatResponse(BaseModel):
@@ -292,7 +294,7 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_current_user)):
 
     conv_store.add_message(conv_id, "user", req.question)
 
-    result = get_engine(user_id).query(req.question)
+    result = get_engine(user_id).query(req.question, doc_ids=req.doc_ids)
 
     conv_store.add_message(conv_id, "assistant", result["answer"], result["sources"])
 
@@ -320,11 +322,11 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
 
     conv_store.add_message(conv_id, "user", req.question)
 
-    def generate():
+    async def generate():
         full_text = ""
         sources = []
 
-        for msg_type, data in get_engine(user_id).stream_query(req.question):
+        async for msg_type, data in get_engine(user_id).astream_query(req.question, doc_ids=req.doc_ids):
             if msg_type == "sources":
                 sources = data
                 yield f"data: {json.dumps({'type': 'sources', 'data': data})}\n\n"

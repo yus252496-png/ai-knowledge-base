@@ -215,6 +215,8 @@ class RAGEngine:
             openai_api_key=LLM_API_KEY,
             openai_api_base=LLM_BASE_URL,
             temperature=0.3,
+            timeout=30,
+            max_retries=0,
             **kwargs,
         )
 
@@ -262,14 +264,14 @@ class RAGEngine:
             "total_chunks": len(chunks),
         }
 
-    def query(self, question: str, k: int = 5) -> dict:
-        result = self.retrieve(question, k)
+    def query(self, question: str, k: int = 5, doc_ids: list = None) -> dict:
+        result = self.retrieve(question, k, doc_ids=doc_ids)
         if result.get("error"):
             return {"answer": result["error"], "sources": []}
         if not result.get("context"):
             return result
 
-        system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文回答问题。如果上下文中没有足够信息，明确告诉用户找不到相关信息。用中文回答。不要添加上下文之外的信息。"
+        system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
@@ -282,10 +284,23 @@ class RAGEngine:
         except Exception as e:
             return {"answer": f"大模型调用失败：{e}", "sources": result["sources"]}
 
-    def retrieve(self, question: str, k: int = 5) -> dict:
+    def retrieve(self, question: str, k: int = 5, doc_ids: list = None) -> dict:
         try:
             store = self._get_store()
-            docs_with_scores = store.similarity_search_with_score(question, k=k)
+
+            # 文档过滤：doc_ids 非空时只搜索指定文档
+            filter_fn = None
+            effective_k = k
+            if doc_ids is not None and len(doc_ids) > 0:
+                doc_ids_set = set(doc_ids)
+                filter_fn = lambda md: md.get("doc_id") in doc_ids_set
+                effective_k = k * 3  # FAISS 是后过滤，放大 k 保证结果数
+
+            try:
+                docs_with_scores = store.similarity_search_with_score(question, k=effective_k, filter=filter_fn)
+            except Exception:
+                # 带 filter 查询失败时（如 FAISS 索引只有占位文档），降级为无过滤查询
+                docs_with_scores = store.similarity_search_with_score(question, k=k)
         except Exception:
             return {"error": "知识库为空，请先上传文档。", "sources": [], "context": ""}
 
@@ -300,7 +315,21 @@ class RAGEngine:
                 self._store = None  # 下次重新加载
                 try:
                     store = self._get_store()
-                    docs_with_scores = store.similarity_search_with_score(question, k=k)
+                    docs_with_scores = store.similarity_search_with_score(question, k=effective_k, filter=filter_fn)
+                    relevant_docs = [(doc, score) for doc, score in docs_with_scores
+                                     if doc.metadata.get("source") != "_init_"]
+                except Exception:
+                    pass
+
+        if doc_ids and not relevant_docs:
+            # 用户选了文档但没有匹配结果，可能是索引与元数据不同步，强制重建
+            if self._try_restore_from_pg():
+                self._rebuild_index()
+                self._persist()
+                self._store = None
+                try:
+                    store = self._get_store()
+                    docs_with_scores = store.similarity_search_with_score(question, k=effective_k, filter=filter_fn)
                     relevant_docs = [(doc, score) for doc, score in docs_with_scores
                                      if doc.metadata.get("source") != "_init_"]
                 except Exception:
@@ -327,8 +356,8 @@ class RAGEngine:
 
         return {"context": "\n---\n".join(context_parts), "sources": sources}
 
-    def stream_query(self, question: str, k: int = 5):
-        result = self.retrieve(question, k)
+    def stream_query(self, question: str, k: int = 5, doc_ids: list = None):
+        result = self.retrieve(question, k, doc_ids=doc_ids)
         if result.get("error"):
             yield ("error", result["error"])
             return
@@ -338,7 +367,7 @@ class RAGEngine:
 
         yield ("sources", result["sources"])
 
-        system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文回答问题。如果上下文中没有足够信息，明确告诉用户找不到相关信息。用中文回答。不要添加上下文之外的信息。"
+        system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
             SystemMessage(content=system_prompt),
             HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
@@ -347,6 +376,31 @@ class RAGEngine:
         llm = self._build_llm()
         try:
             for chunk in llm.stream(messages):
+                if chunk.content:
+                    yield ("token", chunk.content)
+        except Exception as e:
+            yield ("error", f"大模型调用失败：{e}")
+
+    async def astream_query(self, question: str, k: int = 5, doc_ids: list = None):
+        result = self.retrieve(question, k, doc_ids=doc_ids)
+        if result.get("error"):
+            yield ("error", result["error"])
+            return
+        if not result.get("context"):
+            yield ("error", "未在已上传的文档中找到相关信息")
+            return
+
+        yield ("sources", result["sources"])
+
+        system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
+        messages = [
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
+        ]
+
+        llm = self._build_llm()
+        try:
+            async for chunk in llm.astream(messages):
                 if chunk.content:
                     yield ("token", chunk.content)
         except Exception as e:
