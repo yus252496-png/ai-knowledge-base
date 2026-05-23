@@ -524,6 +524,14 @@ body {
   white-space: nowrap;
   color: #1f1f1f;
 }
+.doc-info {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
 .conv-meta, .doc-meta {
   font-size: 10px;
   color: #bbb;
