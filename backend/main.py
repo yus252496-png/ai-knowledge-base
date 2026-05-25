@@ -81,8 +81,8 @@ async def global_exception_handler(request, exc):
 frontend_url = os.getenv("FRONTEND_URL", "http://localhost:5173")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[frontend_url, "http://localhost:5173", "http://localhost:3000"],
-    allow_origin_regex=r"https://.*\.vercel\.app",
+    allow_origins=[frontend_url, "http://localhost:5173", "http://localhost:3000", "https://www.elaik.cn"],
+    allow_origin_regex=r"https://.*\.(vercel\.app|elaik\.cn)",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
