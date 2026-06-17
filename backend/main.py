@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
-from config import UPLOAD_DIR, USER_DATA_DIR
+from config import UPLOAD_DIR, USER_DATA_DIR, LLM_BASE_URL, LLM_API_KEY
 from auth import user_store, captcha_store, rate_limiter, AuthService, get_current_user, get_current_admin, SECURITY_QUESTIONS, SUPER_ADMIN_PHONE, _hash_phone
 from database import init_db, USE_PG
 from contextlib import asynccontextmanager
@@ -166,7 +166,7 @@ async def test_rag():
 
 @app.get("/api/test/llm")
 async def test_llm():
-    """直接测试 LLM 连通性（无 RAG），验证 DeepSeek API 是否可达"""
+    """测试 LLM 连通性：先检查网络连通性，再调 DeepSeek API"""
     import time as _time
     t0 = _time.time()
 
@@ -174,18 +174,39 @@ async def test_llm():
         yield f"data: {json.dumps({'type': 'connected'})}\n\n"
         print(f"[test-llm] connected at t={_time.time()-t0:.1f}s")
 
+        # 1) 测试 DNS 解析
+        try:
+            import socket
+            t1 = _time.time()
+            addrs = socket.getaddrinfo("api.deepseek.com", 443)
+            yield f"data: {json.dumps({'type': 'log', 'data': f'DNS OK: {addrs[0][4]} ({_time.time()-t1:.2f}s)'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'data': f'DNS failed: {e}'})}\n\n"
+            return
+
+        # 2) 测试 TCP 连接
+        try:
+            import httpx
+            t1 = _time.time()
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.get(f"{LLM_BASE_URL}/models", headers={"Authorization": f"Bearer {LLM_API_KEY}"})
+                yield f"data: {json.dumps({'type': 'log', 'data': f'HTTP GET /models: {r.status_code} in {_time.time()-t1:.2f}s'})}\n\n"
+        except httpx.TimeoutException:
+            yield f"data: {json.dumps({'type': 'error', 'data': f'HTTP timeout connecting to {LLM_BASE_URL} after 10s'})}\n\n"
+            return
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'data': f'HTTP error (non-fatal): {type(e).__name__}: {e}'})}\n\n"
+
+        # 3) 测试 LLM chat completions
         try:
             from rag_engine import RAGEngine
             engine = RAGEngine("test_llm")
-            yield f"data: {json.dumps({'type': 'log', 'data': f'engine ready at {_time.time()-t0:.1f}s'})}\n\n"
-
             from langchain_core.messages import HumanMessage, SystemMessage
             llm = engine._build_llm()
             messages = [
                 SystemMessage(content="你是一个助手。请简短回复。"),
-                HumanMessage(content="回复'hello world'即可"),
+                HumanMessage(content="只回复'hello world'这四个字符"),
             ]
-            print(f"[test-llm] starting LLM astream at t={_time.time()-t0:.1f}s")
             yield f"data: {json.dumps({'type': 'log', 'data': f'starting LLM astream at {_time.time()-t0:.1f}s'})}\n\n"
 
             stream = llm.astream(messages)
@@ -197,19 +218,15 @@ async def test_llm():
                     if chunk.content:
                         token_idx += 1
                         yield f"data: {json.dumps({'type': 'token', 'data': chunk.content})}\n\n"
-                        print(f"[test-llm] token {token_idx} at t={t:.1f}s")
                 except StopAsyncIteration:
                     break
 
-            print(f"[test-llm] LLM done at t={_time.time()-t0:.1f}s")
-            yield f"data: {json.dumps({'type': 'log', 'data': f'llm done at {_time.time()-t0:.1f}s, total tokens: {token_idx}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'log', 'data': f'llm done in {_time.time()-t0:.1f}s, {token_idx} tokens'})}\n\n"
         except asyncio.TimeoutError:
-            print(f"[test-llm] LLM timeout at t={_time.time()-t0:.1f}s")
-            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM timeout at {_time.time()-t0:.1f}s'})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM chunk timeout (15s) at {_time.time()-t0:.1f}s'})}\n\n"
             return
         except Exception as e:
-            print(f"[test-llm] exception at t={_time.time()-t0:.1f}s: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM error: {type(e).__name__}: {e}'})}\n\n"
             return
 
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
