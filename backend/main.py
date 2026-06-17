@@ -126,6 +126,43 @@ class ChatResponse(BaseModel):
 async def health():
     return {"status": "ok"}
 
+@app.get("/api/test/rag")
+async def test_rag():
+    """测试 RAG 全流程（无 auth），验证 SSE 和检索是否正常"""
+    import time as _time
+    t0 = _time.time()
+
+    async def gen():
+        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+        print(f"[test] connected at t={_time.time()-t0:.1f}s")
+
+        try:
+            engine = get_engine("78b6c4af")
+            print(f"[test] engine ready at t={_time.time()-t0:.1f}s")
+            yield f"data: {json.dumps({'type': 'log', 'data': f'engine ready at {_time.time()-t0:.1f}s'})}\n\n"
+
+            async for msg_type, data in engine.astream_query("简单回复hello即可", k=3, doc_ids=None):
+                t = _time.time() - t0
+                if msg_type == "sources":
+                    print(f"[test] sources at t={t:.1f}s: {len(data)} sources")
+                    yield f"data: {json.dumps({'type': 'sources', 'data': data})}\n\n"
+                elif msg_type == "token":
+                    yield f"data: {json.dumps({'type': 'token', 'data': data})}\n\n"
+                elif msg_type == "error":
+                    print(f"[test] error at t={t:.1f}s: {data}")
+                    yield f"data: {json.dumps({'type': 'error', 'data': data})}\n\n"
+                    return
+            print(f"[test] LLM done at t={_time.time()-t0:.1f}s")
+        except Exception as e:
+            print(f"[test] exception at t={_time.time()-t0:.1f}s: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        print(f"[test] total: {_time.time()-t0:.1f}s")
+
+    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
+
 
 # ===== 认证模块 =====
 
