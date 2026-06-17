@@ -349,7 +349,9 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
         _t0 = _time.time()
         print(f"[stream] connected event at t={_t0:.1f}")
         # 先发送 connected 事件，让浏览器确认连接已建立
+        # 填充 padding 以突破 Railway 代理缓冲阈值（~8KB）
         yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+        yield ":" + " " * 8000 + "\n\n"
 
         full_text = ""
         sources = []
