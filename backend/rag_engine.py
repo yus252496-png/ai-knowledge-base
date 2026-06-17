@@ -1,14 +1,13 @@
 import os
 import json
 import asyncio
+import httpx
 from typing import List
 from pypdf import PdfReader
 from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
-from langchain_core.messages import SystemMessage, HumanMessage
 from langchain_core.embeddings import Embeddings
-from langchain_openai import ChatOpenAI
 from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, EMBEDDING_MODEL, CHUNK_SIZE, CHUNK_OVERLAP, CHROMA_DIR, UPLOAD_DIR, USER_DATA_DIR
 from database import get_db
 from datetime import datetime
@@ -210,17 +209,6 @@ class RAGEngine:
                 ))
         return documents
 
-    def _build_llm(self, **kwargs):
-        return ChatOpenAI(
-            model=LLM_MODEL,
-            openai_api_key=LLM_API_KEY,
-            openai_api_base=LLM_BASE_URL,
-            temperature=0.3,
-            timeout=15,
-            max_retries=0,
-            **kwargs,
-        )
-
     def process_pdf(self, file_path: str, doc_id: str, original_name: str = None, pdf_bytes: bytes = None) -> dict:
         pages = self._extract_pdf_text(file_path)
         if not pages:
@@ -274,14 +262,30 @@ class RAGEngine:
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"上下文信息：\n{result['context']}\n\n问题：{question}"},
         ]
 
-        llm = self._build_llm()
         try:
-            response = llm.invoke(messages)
-            return {"answer": response.content, "sources": result["sources"]}
+            resp = httpx.post(
+                f"{LLM_BASE_URL}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": LLM_MODEL,
+                    "messages": messages,
+                    "stream": False,
+                    "temperature": 0.3,
+                    "max_tokens": 4096,
+                },
+                timeout=30,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            answer = data["choices"][0]["message"]["content"]
+            return {"answer": answer, "sources": result["sources"]}
         except Exception as e:
             return {"answer": f"大模型调用失败：{e}", "sources": result["sources"]}
 
@@ -370,15 +374,43 @@ class RAGEngine:
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"上下文信息：\n{result['context']}\n\n问题：{question}"},
         ]
 
-        llm = self._build_llm()
         try:
-            for chunk in llm.stream(messages):
-                if chunk.content:
-                    yield ("token", chunk.content)
+            with httpx.Client(timeout=30) as client:
+                with client.stream(
+                    "POST",
+                    f"{LLM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": LLM_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": 0.3,
+                        "max_tokens": 4096,
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        yield ("error", f"LLM API error: {resp.status_code}")
+                        return
+                    for line in resp.iter_lines():
+                        if line.startswith("data: "):
+                            payload = line[6:].strip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield ("token", content)
+                            except json.JSONDecodeError:
+                                pass
         except Exception as e:
             yield ("error", f"大模型调用失败：{e}")
 
@@ -405,22 +437,50 @@ class RAGEngine:
 
         system_prompt = "你是一个基于知识库的问答助手。请根据提供的上下文来回答问题。你可以基于上下文进行总结、推理和分析，必要时用自己的知识补充说明。如果上下文中完全没有相关信息，明确告诉用户找不到相关信息。用中文回答。"
         messages = [
-            SystemMessage(content=system_prompt),
-            HumanMessage(content=f"上下文信息：\n{result['context']}\n\n问题：{question}"),
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"上下文信息：\n{result['context']}\n\n问题：{question}"},
         ]
 
-        llm = self._build_llm()
         try:
-            print(f"[astream] LLM astream start at t={_time.time()-_t0:.1f}s")
-            stream = llm.astream(messages)
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=10)
-                    if chunk.content:
-                        yield ("token", chunk.content)
-                except StopAsyncIteration:
-                    break
-        except asyncio.TimeoutError:
+            print(f"[astream] httpx astream start at t={_time.time()-_t0:.1f}s")
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{LLM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "model": LLM_MODEL,
+                        "messages": messages,
+                        "stream": True,
+                        "temperature": 0.3,
+                        "max_tokens": 4096,
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        err_msg = f"LLM API error: HTTP {resp.status_code}"
+                        print(f"[astream] {err_msg}")
+                        yield ("error", err_msg)
+                        return
+                    token_count = 0
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: "):
+                            payload = line[6:].strip()
+                            if payload == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(payload)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    token_count += 1
+                                    yield ("token", content)
+                            except json.JSONDecodeError:
+                                pass
+                    print(f"[astream] LLM done at t={_time.time()-_t0:.1f}s, {token_count} tokens")
+        except httpx.TimeoutException:
             print(f"[astream] LLM timeout at t={_time.time()-_t0:.1f}s")
             yield ("error", "大模型响应超时，请稍后重试")
         except Exception as e:

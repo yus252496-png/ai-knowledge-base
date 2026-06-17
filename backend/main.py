@@ -231,38 +231,6 @@ async def test_llm():
         except Exception as e:
             yield f"data: {json.dumps({'type': 'log', 'data': f'direct chat error: {type(e).__name__}: {e}'})}\n\n"
 
-        # 4) 测试 LangChain LLM
-        try:
-            from rag_engine import RAGEngine
-            engine = RAGEngine("test_llm")
-            from langchain_core.messages import HumanMessage, SystemMessage
-            llm = engine._build_llm()
-            messages = [
-                SystemMessage(content="你是一个助手。请简短回复。"),
-                HumanMessage(content="只回复'hello world'这四个字符"),
-            ]
-            yield f"data: {json.dumps({'type': 'log', 'data': f'starting LLM astream at {_time.time()-t0:.1f}s'})}\n\n"
-
-            stream = llm.astream(messages)
-            token_idx = 0
-            while True:
-                try:
-                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=15)
-                    t = _time.time() - t0
-                    if chunk.content:
-                        token_idx += 1
-                        yield f"data: {json.dumps({'type': 'token', 'data': chunk.content})}\n\n"
-                except StopAsyncIteration:
-                    break
-
-            yield f"data: {json.dumps({'type': 'log', 'data': f'llm done in {_time.time()-t0:.1f}s, {token_idx} tokens'})}\n\n"
-        except asyncio.TimeoutError:
-            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM chunk timeout (15s) at {_time.time()-t0:.1f}s'})}\n\n"
-            return
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM error: {type(e).__name__}: {e}'})}\n\n"
-            return
-
         yield f"data: {json.dumps({'type': 'done'})}\n\n"
         print(f"[test-llm] total: {_time.time()-t0:.1f}s")
 
