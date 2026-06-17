@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from rag_engine import RAGEngine
 from conversations import ConversationStore
-from config import UPLOAD_DIR, USER_DATA_DIR, LLM_BASE_URL, LLM_API_KEY
+from config import UPLOAD_DIR, USER_DATA_DIR
 from auth import user_store, captcha_store, rate_limiter, AuthService, get_current_user, get_current_admin, SECURITY_QUESTIONS, SUPER_ADMIN_PHONE, _hash_phone
 from database import init_db, USE_PG
 from contextlib import asynccontextmanager
@@ -125,116 +125,6 @@ class ChatResponse(BaseModel):
 @app.get("/api/health")
 async def health():
     return {"status": "ok"}
-
-@app.get("/api/test/rag")
-async def test_rag():
-    """测试 RAG 全流程（无 auth），验证 SSE 和检索是否正常"""
-    import time as _time
-    t0 = _time.time()
-
-    async def gen():
-        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-        print(f"[test] connected at t={_time.time()-t0:.1f}s")
-
-        try:
-            engine = get_engine("78b6c4af")
-            print(f"[test] engine ready at t={_time.time()-t0:.1f}s")
-            yield f"data: {json.dumps({'type': 'log', 'data': f'engine ready at {_time.time()-t0:.1f}s'})}\n\n"
-
-            async for msg_type, data in engine.astream_query("简单回复hello即可", k=3, doc_ids=None):
-                t = _time.time() - t0
-                if msg_type == "sources":
-                    print(f"[test] sources at t={t:.1f}s: {len(data)} sources")
-                    yield f"data: {json.dumps({'type': 'sources', 'data': data})}\n\n"
-                elif msg_type == "token":
-                    yield f"data: {json.dumps({'type': 'token', 'data': data})}\n\n"
-                elif msg_type == "error":
-                    print(f"[test] error at t={t:.1f}s: {data}")
-                    yield f"data: {json.dumps({'type': 'error', 'data': data})}\n\n"
-                    return
-            print(f"[test] LLM done at t={_time.time()-t0:.1f}s")
-        except Exception as e:
-            print(f"[test] exception at t={_time.time()-t0:.1f}s: {e}")
-            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
-            return
-
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        print(f"[test] total: {_time.time()-t0:.1f}s")
-
-    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
-
-
-@app.get("/api/test/llm")
-async def test_llm():
-    """测试 LLM 连通性：先检查网络连通性，再调 DeepSeek API"""
-    import time as _time
-    t0 = _time.time()
-
-    async def gen():
-        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-        print(f"[test-llm] connected at t={_time.time()-t0:.1f}s")
-
-        # 1) 测试 DNS 解析
-        try:
-            import socket
-            t1 = _time.time()
-            addrs = socket.getaddrinfo("api.deepseek.com", 443)
-            yield f"data: {json.dumps({'type': 'log', 'data': f'DNS OK: {addrs[0][4]} ({_time.time()-t1:.2f}s)'})}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'data': f'DNS failed: {e}'})}\n\n"
-            return
-
-        # 2) 测试 HTTP /models 连通性
-        try:
-            import httpx
-            t1 = _time.time()
-            async with httpx.AsyncClient(timeout=10) as client:
-                r = await client.get(f"{LLM_BASE_URL}/models", headers={"Authorization": f"Bearer {LLM_API_KEY}"})
-                yield f"data: {json.dumps({'type': 'log', 'data': f'HTTP GET /models: {r.status_code} in {_time.time()-t1:.2f}s'})}\n\n"
-        except httpx.TimeoutException:
-            yield f"data: {json.dumps({'type': 'error', 'data': f'HTTP timeout connecting to {LLM_BASE_URL} after 10s'})}\n\n"
-            return
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'log', 'data': f'HTTP error (non-fatal): {type(e).__name__}: {e}'})}\n\n"
-
-        # 3) 测试 chat completions API 直连（不用 LangChain）
-        try:
-            import httpx
-            t1 = _time.time()
-            async with httpx.AsyncClient(timeout=30) as client:
-                payload = {
-                    "model": "deepseek-chat",
-                    "messages": [{"role": "user", "content": "回复OK即可"}],
-                    "stream": True,
-                    "max_tokens": 20,
-                }
-                async with client.stream(
-                    "POST",
-                    f"{LLM_BASE_URL}/chat/completions",
-                    headers={
-                        "Authorization": f"Bearer {LLM_API_KEY}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                ) as resp:
-                    yield f"data: {json.dumps({'type': 'log', 'data': f'chat/completions status: {resp.status_code} in {_time.time()-t1:.1f}s'})}\n\n"
-                    idx = 0
-                    async for line in resp.aiter_lines():
-                        if line.startswith("data: ") and line[6:] != "[DONE]":
-                            idx += 1
-                            if idx <= 2:
-                                yield f"data: {json.dumps({'type': 'log', 'data': f'SSE line {idx}: {line[:80]}'})}\n\n"
-                    yield f"data: {json.dumps({'type': 'log', 'data': f'direct SSE done, {idx} lines in {_time.time()-t1:.1f}s'})}\n\n"
-        except httpx.TimeoutException:
-            yield f"data: {json.dumps({'type': 'error', 'data': f'chat/completions timeout after 30s'})}\n\n"
-            return
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'log', 'data': f'direct chat error: {type(e).__name__}: {e}'})}\n\n"
-
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-        print(f"[test-llm] total: {_time.time()-t0:.1f}s")
-
-    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
 
 
 # ===== 认证模块 =====
