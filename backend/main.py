@@ -184,7 +184,7 @@ async def test_llm():
             yield f"data: {json.dumps({'type': 'error', 'data': f'DNS failed: {e}'})}\n\n"
             return
 
-        # 2) 测试 TCP 连接
+        # 2) 测试 HTTP /models 连通性
         try:
             import httpx
             t1 = _time.time()
@@ -197,7 +197,41 @@ async def test_llm():
         except Exception as e:
             yield f"data: {json.dumps({'type': 'log', 'data': f'HTTP error (non-fatal): {type(e).__name__}: {e}'})}\n\n"
 
-        # 3) 测试 LLM chat completions
+        # 3) 测试 chat completions API 直连（不用 LangChain）
+        try:
+            import httpx
+            t1 = _time.time()
+            async with httpx.AsyncClient(timeout=30) as client:
+                payload = {
+                    "model": "deepseek-chat",
+                    "messages": [{"role": "user", "content": "回复OK即可"}],
+                    "stream": True,
+                    "max_tokens": 20,
+                }
+                async with client.stream(
+                    "POST",
+                    f"{LLM_BASE_URL}/chat/completions",
+                    headers={
+                        "Authorization": f"Bearer {LLM_API_KEY}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                ) as resp:
+                    yield f"data: {json.dumps({'type': 'log', 'data': f'chat/completions status: {resp.status_code} in {_time.time()-t1:.1f}s'})}\n\n"
+                    idx = 0
+                    async for line in resp.aiter_lines():
+                        if line.startswith("data: ") and line[6:] != "[DONE]":
+                            idx += 1
+                            if idx <= 2:
+                                yield f"data: {json.dumps({'type': 'log', 'data': f'SSE line {idx}: {line[:80]}'})}\n\n"
+                    yield f"data: {json.dumps({'type': 'log', 'data': f'direct SSE done, {idx} lines in {_time.time()-t1:.1f}s'})}\n\n"
+        except httpx.TimeoutException:
+            yield f"data: {json.dumps({'type': 'error', 'data': f'chat/completions timeout after 30s'})}\n\n"
+            return
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'log', 'data': f'direct chat error: {type(e).__name__}: {e}'})}\n\n"
+
+        # 4) 测试 LangChain LLM
         try:
             from rag_engine import RAGEngine
             engine = RAGEngine("test_llm")
