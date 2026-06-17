@@ -164,6 +164,60 @@ async def test_rag():
     return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
 
 
+@app.get("/api/test/llm")
+async def test_llm():
+    """直接测试 LLM 连通性（无 RAG），验证 DeepSeek API 是否可达"""
+    import time as _time
+    t0 = _time.time()
+
+    async def gen():
+        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+        print(f"[test-llm] connected at t={_time.time()-t0:.1f}s")
+
+        try:
+            from rag_engine import RAGEngine
+            engine = RAGEngine("test_llm")
+            yield f"data: {json.dumps({'type': 'log', 'data': f'engine ready at {_time.time()-t0:.1f}s'})}\n\n"
+
+            from langchain_core.messages import HumanMessage, SystemMessage
+            llm = engine._build_llm()
+            messages = [
+                SystemMessage(content="你是一个助手。请简短回复。"),
+                HumanMessage(content="回复'hello world'即可"),
+            ]
+            print(f"[test-llm] starting LLM astream at t={_time.time()-t0:.1f}s")
+            yield f"data: {json.dumps({'type': 'log', 'data': f'starting LLM astream at {_time.time()-t0:.1f}s'})}\n\n"
+
+            stream = llm.astream(messages)
+            token_idx = 0
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=15)
+                    t = _time.time() - t0
+                    if chunk.content:
+                        token_idx += 1
+                        yield f"data: {json.dumps({'type': 'token', 'data': chunk.content})}\n\n"
+                        print(f"[test-llm] token {token_idx} at t={t:.1f}s")
+                except StopAsyncIteration:
+                    break
+
+            print(f"[test-llm] LLM done at t={_time.time()-t0:.1f}s")
+            yield f"data: {json.dumps({'type': 'log', 'data': f'llm done at {_time.time()-t0:.1f}s, total tokens: {token_idx}'})}\n\n"
+        except asyncio.TimeoutError:
+            print(f"[test-llm] LLM timeout at t={_time.time()-t0:.1f}s")
+            yield f"data: {json.dumps({'type': 'error', 'data': f'LLM timeout at {_time.time()-t0:.1f}s'})}\n\n"
+            return
+        except Exception as e:
+            print(f"[test-llm] exception at t={_time.time()-t0:.1f}s: {e}")
+            yield f"data: {json.dumps({'type': 'error', 'data': str(e)})}\n\n"
+            return
+
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+        print(f"[test-llm] total: {_time.time()-t0:.1f}s")
+
+    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
+
+
 # ===== 认证模块 =====
 
 @app.post("/api/auth/register")
