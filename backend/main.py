@@ -126,17 +126,6 @@ class ChatResponse(BaseModel):
 async def health():
     return {"status": "ok"}
 
-@app.get("/api/test/sse")
-async def test_sse():
-    import asyncio
-    async def gen():
-        yield f"data: {json.dumps({'type': 'hello'})}\n\n"
-        await asyncio.sleep(0.5)
-        yield f"data: {json.dumps({'type': 'world'})}\n\n"
-        await asyncio.sleep(0.5)
-        yield f"data: {json.dumps({'type': 'done'})}\n\n"
-    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
-
 
 # ===== 认证模块 =====
 
@@ -359,17 +348,14 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
         import time as _time
         _t0 = _time.time()
         print(f"[stream] connected event at t={_t0:.1f}")
-        # 先发送 connected 事件，让浏览器确认连接已建立
-        # 填充 padding 以突破 Railway 代理缓冲阈值（~8KB）
         yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-        yield ":" + " " * 8000 + "\n\n"
 
         full_text = ""
         sources = []
 
         try:
             engine = get_engine(user_id)
-            print(f"[stream] got engine at t={_time.time()-_t0:.1f}s")
+            print(f"[stream] got engine at t={_time.time()-_t0:.1f}s, starting astream_query")
             async for msg_type, data in engine.astream_query(req.question, doc_ids=req.doc_ids):
                 if msg_type == "sources":
                     sources = data
@@ -395,9 +381,7 @@ async def chat_stream(req: ChatRequest, user_id: str = Depends(get_current_user)
         generate(),
         media_type="text/plain",
         headers={
-            "X-Accel-Buffering": "no",
-            "Cache-Control": "no-cache, no-store, must-revalidate",
-            "Connection": "keep-alive",
+            "Cache-Control": "no-cache",
         },
     )
 
