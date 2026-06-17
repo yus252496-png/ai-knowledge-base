@@ -126,6 +126,17 @@ class ChatResponse(BaseModel):
 async def health():
     return {"status": "ok"}
 
+@app.get("/api/test/sse")
+async def test_sse():
+    import asyncio
+    async def gen():
+        yield f"data: {json.dumps({'type': 'hello'})}\n\n"
+        await asyncio.sleep(0.5)
+        yield f"data: {json.dumps({'type': 'world'})}\n\n"
+        await asyncio.sleep(0.5)
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+    return StreamingResponse(gen(), media_type="text/plain", headers={"Cache-Control": "no-cache"})
+
 
 # ===== 认证模块 =====
 
